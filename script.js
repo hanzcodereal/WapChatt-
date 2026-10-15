@@ -60,7 +60,7 @@ async function initDashboard() {
   if (!getToken()) return logout();
   let me;
   try { me = (await api("/me")).user; } catch { return logout(); }
-  const st = { contacts: [], rooms: [], stories: [], calls: [], cur: null, unread: {}, last: {}, lastT: {}, seen: {}, filter: "all", tab: "home", byId: {}, reply: null };
+  const st = { contacts: [], rooms: [], stories: [], calls: [], cur: null, unread: {}, last: {}, lastT: {}, seen: {}, filter: "all", tab: "home", byId: {}, reply: null, mem: {}, memTry: {} };
   const mk = (tag, txt, cls) => { const e = document.createElement(tag); if (txt != null) e.textContent = txt; if (cls) e.className = cls; return e; };
   const hue = (n) => [...n].reduce((a, c) => a + c.charCodeAt(0), 0) * 37 % 360;
   const av = (n, img) => { const e = mk("div", img ? "" : (n[0] || "?").toUpperCase(), "av"); e.style.background = img ? "url(" + img + ") center/cover" : "hsl(" + hue(n) + ",85%,78%)"; return e; };
@@ -69,6 +69,7 @@ async function initDashboard() {
     const t = mk("div", msg, "toast"); t.setAttribute("role", "status"); document.body.append(t);
     setTimeout(() => t.remove(), 3600);
   };
+  const X = {};  // fitur dari extras.js (foto/video, sematan pesan, bintang); diisi sebelum dashboard ditampilkan
   const STK = /^\[stk:([0-9a-f]{24})\]$/;
   const stkId = (b) => { const m = STK.exec(b || ""); return m && m[1]; };
   const RE = /^\[re:(\d+)\]([\s\S]*)$/;
@@ -205,7 +206,7 @@ async function initDashboard() {
       return b;
     }));
     const E = st.contacts.map((c) => ({ p: c.player_id, n: c.full_name, i: c.avatar, k: "dm", v: c.verified, tag: c.owner ? "OWNER" : "" }));
-    st.rooms.filter((r) => r.kind === "group" || r.joined).forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind, i: r.avatar }));
+    st.rooms.filter((r) => r.kind === "group" || r.joined).forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind, i: r.avatar, v: !!r.verified }));
     E.push({ p: me.player_id, n: "Catatan saya", i: me.avatar, k: "dm", tag: "KAMU" });
     Object.keys(st.last).forEach((k) => { if (!isRoom(k) && !saved(k) && k !== me.player_id) E.push({ p: k, n: nameOf(k), i: imgOf(k), k: "dm", v: k === OFFICIAL, tag: k === OFFICIAL ? "RESMI" : "" }); });
     const F = E.filter((e) => (st.filter === "all" || e.k === st.filter) && (e.n + e.p).toLowerCase().includes(q))
@@ -232,7 +233,7 @@ async function initDashboard() {
     /* Saluran */
     const chs = st.rooms.filter((r) => r.kind === "channel");
     const chRow = (r) => row(r.avatar || null, r.name, r.count + " pengikut" + (r.about ? " · " + r.about : ""), () => (r.joined ? open("R-" + r.id) : joinCh(r.id)),
-      { avEl: r.avatar ? null : chAv("channel"), badge: r.owner === me.player_id ? "ADMIN" : st.unread["R-" + r.id] || "", icon: r.joined ? null : ic("plus", "pbtn") });
+      { verified: r.verified, avEl: r.avatar ? null : chAv("channel"), badge: r.owner === me.player_id ? "ADMIN" : st.unread["R-" + r.id] || "", icon: r.joined ? null : ic("plus", "pbtn") });
     const mineCh = chs.filter((r) => r.joined), finds = chs.filter((r) => !r.joined);
     $("#mych").replaceChildren(...mineCh.map(chRow));
     $("#find-h").hidden = !finds.length;
@@ -306,7 +307,7 @@ async function initDashboard() {
   }
   const quote = (id) => {
     const o = st.byId[id], q = mk("div", null, "quote");
-    q.append(mk("b", o ? (o.sender === me.player_id ? "Kamu" : nameOf(o.sender)) : "Pesan"), mk("span", o ? (stkId(o.body) ? "Stiker" : parseRe(o.body).text).slice(0, 80) : "Pesan tidak ditemukan"));
+    q.append(mk("b", o ? (o.sender === me.player_id ? "Kamu" : nameOf(o.sender)) : "Pesan"), mk("span", o ? lastText(o.body).slice(0, 80) : "Pesan tidak ditemukan"));
     q.onclick = () => { const t = document.querySelector('#msgs .bub[data-mid="' + id + '"]'); if (t) { t.scrollIntoView({ behavior: "smooth", block: "center" }); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 1200); } };
     return q;
   };
@@ -314,50 +315,65 @@ async function initDashboard() {
     const o = st.byId[id]; if (!o) return;
     st.reply = id;
     $("#rpname").textContent = o.sender === me.player_id ? "Kamu" : nameOf(o.sender);
-    $("#rptext").textContent = (stkId(o.body) ? "Stiker" : parseRe(o.body).text).slice(0, 80);
+    $("#rptext").textContent = lastText(o.body).slice(0, 80);
     $("#replybar").hidden = false; $("#text").focus();
   }
   const stopReply = () => { st.reply = null; $("#replybar").hidden = true; };
   $("#rpx").onclick = stopReply;
+  /* anggota grup: foto profil + nama untuk pengirim yang belum disimpan sebagai kontak */
+  const gName = (p) => (p === me.player_id ? me.full_name : contact(p) ? contact(p).full_name : (st.mem[p] && st.mem[p].full_name) || p);
+  const gImg = (p) => (p === me.player_id ? me.avatar : (contact(p) && contact(p).avatar) || (st.mem[p] && st.mem[p].avatar) || "");
+  function paintMem() {
+    document.querySelectorAll("#msgs .gav").forEach((a) => { const p = a.dataset.pid, n = gName(p), i = gImg(p); a.textContent = i ? "" : (n[0] || "?").toUpperCase(); a.style.background = i ? "url(" + i + ") center/cover" : "hsl(" + hue(n) + ",85%,78%)"; });
+    document.querySelectorAll("#msgs .who").forEach((w) => { if (w.dataset.pid) w.textContent = gName(w.dataset.pid); });
+  }
+  async function loadMem(r) {
+    st.memBusy = true;
+    try { (await api("/rooms/" + r.id + "/members")).members.forEach((x) => (st.mem[x.player_id] = { full_name: x.full_name, avatar: x.avatar })); paintMem(); } catch {}
+    st.memBusy = false;
+  }
   function addMsg(m) {
     const mine = m.sender === me.player_id, key = isRoom(m.to) || mine ? m.to : m.sender;
     st.last[key] = m.body; st.lastT[key] = m.t;
     const r = roomOf(st.cur || ""), sid = stkId(m.body), d = mk("div", null, "bub " + (mine ? "out" : "in") + (sid ? " sticker" : "")), box = mk("div"), mt = mk("div", null, "mt");
-    if (!mine && r && r.kind === "group") { const w = mk("small", nameOf(m.sender), "who"); w.style.cursor = "pointer"; w.onclick = () => showProfile(m.sender); box.append(w); }
+    const grp = !mine && r && r.kind === "group";
+    if (grp) {
+      if (!st.mem[m.sender] && !contact(m.sender) && !st.memBusy && !st.memTry[m.sender]) { st.memTry[m.sender] = 1; loadMem(r); }  // anggota baru: muat ulang daftar
+      const w = mk("small", gName(m.sender), "who"); w.dataset.pid = m.sender; w.style.cursor = "pointer"; w.onclick = () => showProfile(m.sender); box.append(w);
+    }
     const rp = parseRe(m.body);
     if (m.id) st.byId[m.id] = m;
     d.dataset.mid = m.id || "";
     if (sid) { const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
     else { if (rp.id) box.append(quote(rp.id)); box.append(mk("span", rp.text)); }
-    if (!$("#form").hidden) { const rb = mk("button", "\u21A9", "rpl"); rb.type = "button"; rb.title = rb.ariaLabel = "Balas"; rb.onclick = (e) => { e.stopPropagation(); const id = +d.dataset.mid; if (!id) return toast("Tunggu pesan terkirim dulu"); startReply(id); }; mt.append(rb); }
-    if (sid && !mine) { const sb = mk("button", "simpan", "rpl"); sb.type = "button"; sb.onclick = (e) => { e.stopPropagation(); saveSticker(sid); }; mt.append(sb); }
-    if (mine) {
-      const xb = mk("button", "hapus", "rpl"); xb.type = "button";
-      xb.onclick = async (e) => {
-        e.stopPropagation(); const id = +d.dataset.mid; if (!id) return toast("Tunggu pesan terkirim dulu");
-        if (!(await dialog({ title: "Hapus pesan?", desc: "Pesan dihapus untuk semua orang. Lawan bicara yang sedang membuka chat ini baru melihatnya hilang setelah membuka ulang.", ok: "Hapus" }))) return;
-        try { await api("/messages/" + id, { method: "DELETE" }); d.remove(); delete st.byId[id]; } catch (err) { toast(err.message); }
-      };
-      mt.append(xb);
-    }
+    if (X.menuBtn) X.menuBtn(mt, d, m, mine, sid);  // Balas, bintang, sematkan, salin, hapus: semuanya di titik tiga
     mt.append(mk("time", tm(m.t)));
     if (mine) { d.dataset.to = m.to; d.dataset.t = m.t; mt.append(tick(m)); }
     d.append(box, mt);
-    $("#msgs").append(d); $("#msgs").scrollTop = 1e9;
+    if (grp) {  // pesan grup dari orang lain: foto profil di samping gelembung
+      const a = av(gName(m.sender), gImg(m.sender)), wrap = mk("div", null, "grow");
+      a.classList.add("gav"); a.dataset.pid = m.sender; a.title = gName(m.sender); a.onclick = () => showProfile(m.sender);
+      wrap.append(a, d); $("#msgs").append(wrap);
+    } else $("#msgs").append(d);
+    $("#msgs").scrollTop = 1e9;
     return d;
   }
   async function open(p) {
     st.cur = p; st.unread[p] = 0;
+    if (X.opened) X.opened();
     const r = roomOf(p);
     $("#rtitle").textContent = p === me.player_id ? "Catatan saya" : nameOf(p);
     const ct = contact(p); if (ct && ct.owner) $("#rtitle").append(mk("i", "OWNER", "own")); if (p === OFFICIAL) $("#rtitle").append(mk("i", "RESMI", "own"));
+    if (r && r.kind === "channel" && r.verified) $("#rtitle").append(ic("seal"));
     $("#rav").replaceChildren(av(nameOf(p), imgOf(p)));
     $("#rid").className = ""; $("#rid").textContent = r ? (r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut") : p === me.player_id ? "Pesan untuk dirimu sendiri" : p;
     roomSub(); $("#tray").hidden = true;
     $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL || p === me.player_id;
     $("#form").hidden = (!!r && r.kind === "channel" && r.owner !== me.player_id) || p === OFFICIAL;
     st.byId = {}; stopReply(); $("#msgs").replaceChildren(); show("room");
+    const memP = r && r.kind === "group" ? loadMem(r) : null;
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
+    if (memP) await memP;
     render();
   }
   $("#back").onclick = () => { st.cur = null; show(st.tab); };
@@ -742,6 +758,7 @@ async function initDashboard() {
       if (!off) {
         box.append(irow("Bio", u.status || (u.private ? "Profil privat" : "-")), irow("Bergabung", dshort(u.joined)),
           irow("Terakhir dilihat", u.online ? "online" : u.seen ? ago(u.seen) : "disembunyikan"));
+        { const b = mk("button", "Salin link profil", "btn full ghost"); b.type = "button"; b.onclick = () => X.shareLink("u", pid); box.append(b); }
         if (!u.me && !u.saved) { const b = mk("button", "Simpan ID", "btn full ghost"); b.type = "button"; b.onclick = () => saveId(pid).then(close); box.append(b); }
         if (!u.me && st.cur !== pid) { const b = mk("button", "Kirim pesan", "btn full"); b.type = "button"; b.onclick = () => { close(); open(pid); }; box.append(b); }
         if (hasStory(pid)) { const b = mk("button", "Lihat status", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); viewStories(pid); }; box.append(b); }
@@ -777,11 +794,17 @@ async function initDashboard() {
       if (!off && !saved(p)) acts.push({ key: "save", label: "Simpan ID" });
       if (!off) acts.push({ key: "nick", label: "Ubah nama kontak" }, { key: "vcall", label: "Video call" }, { key: "acall", label: "Telepon" });
     }
-    acts.push({ key: "pin", label: isPinned(p) ? "Lepas sematan chat" : "Sematkan chat" }, { key: "clear", label: "Hapus chat", danger: true });
+    if (!r && !self && hasStory(p)) acts.push({ key: "story", label: "Lihat status" });
+    if (r && (r.kind === "channel" || r.owner === me.player_id)) acts.push({ key: "link", label: r.kind === "group" ? "Link grup" : "Salin link saluran" });
+    else if (!r && !off) acts.push({ key: "link", label: self ? "Salin link profilku" : "Salin link profil" });
+    acts.push({ key: "pins", label: "Pesan disematkan" }, { key: "stars", label: "Pesan berbintang" },
+      { key: "pin", label: isPinned(p) ? "Lepas sematan chat" : "Sematkan chat" }, { key: "clear", label: "Hapus chat", danger: true });
     const x = await dialog({ title: r ? r.name : self ? "Catatan saya" : nameOf(p), ok: null, actions: acts });
     if (!x) return;
     ({ info: () => showRoomInfo(r), members: () => showMembers(r), profile: () => showProfile(p), save: () => saveId(p),
       nick: () => renameContact(p, (contact(p) || {}).nick), vcall: () => call(true), acall: () => call(false),
+      link: () => X.shareLink(r ? (r.kind === "group" ? "g" : "c") : "u", r || p),
+      story: () => viewStories(p), pins: () => X.showPins(), stars: () => X.showStars(),
       pin: () => togglePin(p), clear: () => clearChat(p) })[x.action]();
   }
   async function clearChat(key) {
@@ -826,6 +849,7 @@ async function initDashboard() {
     const r = st.cur && roomOf(st.cur); if (!r) return;
     $("#rtitle").textContent = r.name; $("#rav").replaceChildren(av(r.name, r.avatar));
     $("#rid").textContent = r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut";
+    if (r.kind === "channel" && r.verified) $("#rtitle").append(ic("seal"));
   }
   async function roomCall(r, path, body, msg) {
     try { await api("/rooms/" + r.id + "/" + path, { method: "POST", body: JSON.stringify(body || {}) }); await loadRooms(); refreshRoomHead(); if (msg) toast(msg); return true; }
@@ -845,8 +869,10 @@ async function initDashboard() {
       const top = mk("div", null, "ptop"), pa = av(r.name, r.avatar);
       if (r.avatar) { pa.style.cursor = "zoom-in"; pa.title = "Perbesar foto"; pa.onclick = () => zoom(r.avatar, r.name); }
       top.style.marginTop = "0"; top.append(pa); box.append(top, mk("p", r.about || "Belum ada deskripsi.", "dlg-d"), irow("Jenis", group ? "Grup" : "Saluran"), irow(group ? "Anggota" : "Pengikut", String(r.count)));
+      if (r.verified) box.append(irow("Status", "Terverifikasi (centang biru)"));
       const act = (label, fn, ghost = true) => { const b = mk("button", label, "btn full" + (ghost ? " ghost" : "")); b.type = "button"; b.onclick = () => { close(); fn(); }; box.append(b); };
       act(group ? "Lihat anggota" : "Lihat pengikut", () => showMembers(r));
+      if (!group) act("Salin link saluran", () => X.shareLink("c", r)); else if (owner) act("Link grup", () => X.shareLink("g", r));
       act("Pemilik: " + nameOf(r.owner), () => showProfile(r.owner));
       if (owner) {
         act("Edit nama dan deskripsi", async () => {
@@ -870,8 +896,6 @@ async function initDashboard() {
       box.append(clearBtn(key, close));
     });
   }
-  const headTap = () => { if (!st.cur) return; const r = roomOf(st.cur); r ? showRoomInfo(r) : showProfile(st.cur); };
-  $("#rav").onclick = headTap; $(".rhead .rt").onclick = headTap;
   function viewStories(p) {
     const list = st.stories.filter((s) => s.owner === p);
     if (!list.length) return;
@@ -914,9 +938,10 @@ async function initDashboard() {
   $("#pdel").onclick = () => saveProfile({ avatar: "" });
   $("#pnamebtn").onclick = () => renameMe();
   $("#ppwbtn").onclick = async () => {
-    const r = await dialog({ title: "Ubah password", fields: [{ name: "o", label: "Password lama", type: "password" }, { name: "n", label: "Password baru (min. 6 karakter)", type: "password" }], ok: "Ganti" });
+    const r = await dialog({ title: "Ubah password", fields: [{ name: "n", label: "Password baru (min. 6 karakter)", type: "password", required: true }, { name: "n2", label: "Ulangi password baru", type: "password", required: true }], ok: "Ganti" });
     if (!r) return;
-    try { await api("/password", { method: "POST", body: JSON.stringify({ old: r.o, new: r.n }) }); toast("Password diganti"); } catch (e) { toast(e.message); }
+    if (r.n !== r.n2) return toast("Kedua password tidak sama.");
+    try { await api("/password", { method: "POST", body: JSON.stringify({ new: r.n }) }); toast("Password diganti"); } catch (e) { toast(e.message); }
   };
   $("#callclear").onclick = async () => { if (await dialog({ title: "Hapus log panggilan?", desc: "Semua riwayat panggilan dihapus dari akunmu saja.", ok: "Hapus semua" })) hideCalls(); };
   $("#pst").onclick = async () => {
@@ -1145,8 +1170,10 @@ async function initDashboard() {
   try { localStorage.removeItem("nova_lock"); } catch {}  // sisa kunci aplikasi lama
 
   /* ----- polling pesan + sinyal ----- */
+  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av }));
   await Promise.all([loadContacts(), loadRooms(), loadStories(), loadChats(), loadPresence()]);
   show("home");
+  if (X.consumeLink) X.consumeLink();
   /* ----- panel owner ----- */
   const ago = (t) => { if (!t) return "belum pernah"; const d = (Date.now() - Date.parse(t)) / 1000; if (d < 90) return "baru saja"; if (d < 3600) return Math.round(d / 60) + " mnt lalu"; if (d < 86400) return Math.round(d / 3600) + " jam lalu"; return Math.round(d / 86400) + " hari lalu"; };
   const dshort = (t) => (t ? new Date(t).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) : "-");
@@ -1160,7 +1187,7 @@ async function initDashboard() {
       $("#astats").replaceChildren(...[["users", "Pengguna"], ["online", "Online"], ["new24", "Baru 24 jam"], ["msgs24", "Pesan 24 jam"], ["groups", "Grup"], ["channels", "Saluran"]].map(([k, l]) => { const c = mk("div", null, "astat"); c.append(mk("b", String(s[k])), mk("small", l)); return c; }));
       $("#ausers").replaceChildren(...(u.users.length ? u.users.map((x) => row(null, x.full_name, x.player_id + " · daftar " + dshort(x.created_at) + " · " + (x.online ? "online" : ago(x.last_seen)),
         () => userActions(x), { verified: x.verified, tag: x.owner ? "OWNER" : "", badge: x.banned ? "BLOKIR" : "", online: x.online })) : [emptyLi("Tidak ada pengguna yang cocok.")]));
-      $("#arooms").replaceChildren(...(r.rooms.length ? r.rooms.map((x) => row(null, x.name, (x.kind === "group" ? "Grup" : "Saluran") + " · " + x.count + " anggota · oleh " + x.owner, () => roomActions(x), { avEl: chAv(x.kind) })) : [emptyLi("Belum ada grup atau saluran.")]));
+      $("#arooms").replaceChildren(...(r.rooms.length ? r.rooms.map((x) => row(null, x.name, (x.kind === "group" ? "Grup" : "Saluran") + " · " + x.count + " anggota · oleh " + x.owner, () => roomActions(x), { avEl: chAv(x.kind), verified: x.verified })) : [emptyLi("Belum ada grup atau saluran.")]));
     } catch (e) { toast(e.message); }
   }
   async function userActions(x) {
@@ -1186,8 +1213,14 @@ async function initDashboard() {
   }
   async function roomActions(x) {
     const jenis = x.kind === "group" ? "grup" : "saluran";
-    const r = await dialog({ title: x.name, desc: jenis + " · " + x.count + " anggota", ok: null, actions: [{ key: "delete", label: "Hapus " + jenis, danger: true }] });
+    const r = await dialog({ title: x.name, desc: jenis + " · " + x.count + " anggota" + (x.kind === "channel" ? " · centang biru otomatis di 1000 pengikut" : ""), ok: null, actions: [
+      ...(x.kind === "channel" ? [{ key: "verify", label: x.verified ? "Cabut centang biru" : "Beri centang biru" }] : []),
+      { key: "delete", label: "Hapus " + jenis, danger: true }] });
     if (!r) return;
+    if (r.action === "verify") {
+      try { await api("/admin/rooms/" + x.id + "/verify", { method: "POST", body: JSON.stringify({ value: !x.verified }) }); toast("Berhasil"); loadAdmin(); loadRooms(); } catch (e) { toast(e.message); }
+      return;
+    }
     if (!(await dialog({ title: "Hapus " + x.name + "?", desc: "Semua pesan di dalamnya ikut terhapus permanen.", ok: "Hapus permanen" }))) return;
     try { await api("/admin/rooms/" + x.id, { method: "DELETE" }); toast("Dihapus"); loadAdmin(); loadRooms(); } catch (e) { toast(e.message); }
   }
@@ -1241,6 +1274,7 @@ function splash() {
 }
 
 function initLanding() {
+  try { if (getToken() && localStorage.getItem("wc_link")) { location.replace("dashboard.html"); return; } } catch {}
   const panel = $("#panel"), v = $("#bg");
   if (v) { if (matchMedia("(prefers-reduced-motion: reduce)").matches) v.pause(); else v.play().catch(() => {}); }
   if (getToken()) { const e = $("#enter"); e.href = "dashboard.html"; e.textContent = "BUKA APLIKASI"; }
@@ -1260,6 +1294,11 @@ function initLanding() {
   document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === document.body) reveal(); });
 }
 
+/* Link berbagi: /?u=ID (profil), /?c=ID (saluran), /?g=KODE (grup). Disimpan dulu supaya tetap terbuka setelah login. */
+try {
+  const q = new URLSearchParams(location.search), k = ["u", "c", "g"].find((x) => q.get(x));
+  if (k) { localStorage.setItem("wc_link", k + ":" + q.get(k)); history.replaceState(null, "", location.pathname); }
+} catch {}
 const page = document.body.dataset.page;
 if (page === "dashboard") splash();
 if (page === "landing") initLanding();

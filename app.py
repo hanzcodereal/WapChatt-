@@ -9,6 +9,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
 from database import Session, User, Contact, Message, Profile, ProfileExt, Sticker, AppSetting, UserFlag, Story, StoryView, ChatClear, ContactName, RoomExt, CallHide, Room, RoomMember, Call, init_db
+import extras  # fitur baru: sematan pesan, bintang, centang biru saluran (tabel dibuat oleh init_db di bawah)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
@@ -23,7 +24,7 @@ OWNER_IDS = {x.strip().upper() for x in os.getenv("OWNER_IDS", "").split(",") if
 ONLINE_SEC = 25
 VERIFIED = {x.strip().upper() for x in os.getenv("VERIFIED_IDS", "").split(",") if x.strip()}  # ID yang dapat centang biru
 ANNOUNCE = os.getenv("ANNOUNCEMENT", "Selamat datang di WapChatt. Simpan ID temanmu lalu mulai chat, telpon, atau video call.")
-PUBLIC_FILES = {"index.html", "login.html", "dashboard.html", "style.css", "script.js", "logo.png", "login.mp4", "intro.mp4"}
+PUBLIC_FILES = {"index.html", "login.html", "dashboard.html", "style.css", "script.js", "logo.png", "login.mp4", "intro.mp4", "extras.js"}
 
 
 def new_pid(db):
@@ -224,9 +225,7 @@ def login():
 @authed
 def password_change(db, u):
     d = request.get_json(silent=True) or {}
-    if not bcrypt.checkpw((d.get("old") or "").encode(), u.password_hash.encode()):
-        return jsonify(error="Password lama salah."), 400
-    new = d.get("new") or ""
+    new = d.get("new") or ""  # password lama tidak diminta lagi (cukup sudah login)
     if len(new) < 6:
         return jsonify(error="Password baru minimal 6 karakter."), 400
     u.password_hash = bcrypt.hashpw(new.encode(), bcrypt.gensalt()).decode()
@@ -338,6 +337,7 @@ def sticker_up(db, u):
 
 
 def purge_room(db, rid):
+    extras.on_room_purge(db, rid)
     db.query(Message).filter(Message.to_id == "R-%d" % rid).delete(synchronize_session=False)
     db.query(ChatClear).filter(ChatClear.peer == "R-%d" % rid).delete(synchronize_session=False)
     db.query(RoomExt).filter(RoomExt.room_id == rid).delete(synchronize_session=False)
@@ -346,6 +346,7 @@ def purge_room(db, rid):
 
 
 def purge_user(db, pid):
+    extras.on_user_purge(db, pid)
     sids = [i for (i,) in db.query(Story.id).filter_by(owner=pid)]
     if sids:
         db.query(StoryView).filter(StoryView.story_id.in_(sids)).delete(synchronize_session=False)
@@ -465,7 +466,9 @@ def adm_rooms(db, u):
     rooms = db.query(Room).order_by(Room.id.desc()).limit(100).all()
     cnt = {rid: n for rid, n in db.query(RoomMember.room_id, func.count(RoomMember.id)).group_by(RoomMember.room_id)}
     names = {x.player_id: x.full_name for x in db.query(User).filter(User.player_id.in_([r.owner for r in rooms]))}
-    return jsonify(rooms=[{"id": r.id, "kind": r.kind, "name": r.name, "owner": names.get(r.owner, r.owner), "count": cnt.get(r.id, 0)} for r in rooms])
+    fl = extras.room_flags(db)
+    return jsonify(rooms=[{"id": r.id, "kind": r.kind, "name": r.name, "owner": names.get(r.owner, r.owner), "count": cnt.get(r.id, 0),
+                           "verified": extras.room_verified(fl, r, cnt.get(r.id, 0))} for r in rooms])
 
 
 @app.delete("/api/admin/rooms/<int:rid>")
@@ -542,6 +545,7 @@ def msg_delete(db, u, mid):
     m = db.get(Message, mid)
     if not m or m.kind != "text" or m.sender != u.player_id:
         return jsonify(error="Pesan tidak bisa dihapus."), 404
+    extras.on_msg_delete(db, m)
     db.delete(m)
     db.commit()
     return jsonify(ok=True)
@@ -767,8 +771,10 @@ def rooms_get(db, u):
     mine = {m.room_id for m in db.query(RoomMember).filter_by(player_id=u.player_id)}
     cnt = dict(db.query(RoomMember.room_id, func.count(RoomMember.id)).group_by(RoomMember.room_id).all())
     ra = {x.room_id: x.avatar or "" for x in db.query(RoomExt)}
+    fl = extras.room_flags(db)
     return jsonify(rooms=[{"id": r.id, "kind": r.kind, "name": r.name, "about": r.about, "owner": r.owner,
-                           "count": cnt.get(r.id, 0), "joined": r.id in mine, "avatar": ra.get(r.id, "")}
+                           "count": cnt.get(r.id, 0), "joined": r.id in mine, "avatar": ra.get(r.id, ""),
+                           "verified": extras.room_verified(fl, r, cnt.get(r.id, 0))}
                           for r in db.query(Room).order_by(Room.id.desc()) if r.kind == "channel" or r.id in mine])
 
 
@@ -910,6 +916,9 @@ def calls_hide(db, u):
             db.add(CallHide(owner=me_id, call_id=cid))
     db.commit()
     return jsonify(ok=True)
+
+
+extras.register(app, authed, owner_only, Session)
 
 
 @app.get("/")

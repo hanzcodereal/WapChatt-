@@ -341,7 +341,6 @@ textarea:focus-visible{outline:3px solid var(--red);outline-offset:2px}
 .replybar b{color:var(--red)}
 .replybar button{background:none;border:0;font-size:1.5rem;line-height:1;cursor:pointer}
 .svviews{margin:0 auto 1rem;background:var(--y);border:3px solid var(--ink);padding:.55rem 1rem;font:700 .8rem "JetBrains Mono",monospace;cursor:pointer}
-.rhead #rav,.rhead .rt{cursor:pointer}
 .dlg.sh{display:grid;gap:.8rem}
 .pcover{height:90px;background:var(--y) center/cover;border:3px solid var(--ink)}
 .ptop{display:flex;flex-direction:column;align-items:center;margin-top:-36px;gap:.3rem;text-align:center}
@@ -376,3 +375,24 @@ textarea:focus-visible{outline:3px solid var(--red);outline-offset:2px}
 .pinned{position:relative;box-shadow:inset 6px 0 0 var(--y)}
 .pinmark{position:absolute;right:.7rem;bottom:.3rem;font-size:.6rem;color:var(--mut);letter-spacing:.04em}
 button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration:underline;color:inherit;padding:.4rem 0}
+
+/* ----- foto / video, sematan pesan, bintang, menu titik tiga ----- */
+.mdot .ic{width:1.05rem;height:1.05rem}
+.bub.sticker .mdot{color:#fff}
+.stm{display:inline-flex;color:#E8A800}
+.stm .ic{width:.8rem;height:.8rem;stroke-width:1.2}
+.pinbar{display:flex;align-items:center;gap:.6rem;width:100%;padding:.45rem .8rem;background:#fff;border:0;border-bottom:3px solid var(--ink);font:inherit;text-align:left;cursor:pointer}
+.pinbar .ic{color:var(--red);width:1.15rem;height:1.15rem}
+.pinbar .pinbody{flex:1;min-width:0}
+.pinbar b{display:block;font-size:.7rem;color:var(--red);letter-spacing:.04em}
+.pinbar #pintext{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.82rem}
+.pinbar i{font-style:normal;font-size:.7rem;color:var(--mut)}
+.pinbar:active{background:var(--bg)}
+.pinx{position:absolute;right:.7rem;bottom:.35rem;background:none;border:0;padding:0 .2rem;font:700 .72rem "JetBrains Mono",monospace;color:var(--red);cursor:pointer}
+.pinx .ic{width:1.1rem;height:1.1rem;color:#E8A800}
+
+/* ----- foto profil di pesan grup ----- */
+.grow{display:flex;align-items:flex-end;gap:.45rem;align-self:flex-start;max-width:94%}
+.grow .bub{max-width:calc(100% - 44px);min-width:0}
+.gav{width:34px;height:34px;font-size:.95rem;border-width:2px;cursor:pointer}
+.dlg-d{white-space:pre-line;overflow-wrap:anywhere}

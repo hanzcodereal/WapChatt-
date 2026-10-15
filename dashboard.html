@@ -40,6 +40,8 @@
 <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
 <symbol id="i-news" viewBox="0 0 24 24"><path d="M3 5c3-1 6-1 9 1v14c-3-2-6-2-9-1zM12 6c3-2 6-2 9-1v14c-3-1-6-1-9 1"/></symbol>
 <symbol id="i-chnew" viewBox="0 0 24 24"><path d="M3 10v4h3l7 4V6L6 10z"/><path d="M18 8v6M15 11h6"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 4v2H6v-2l4-4zM12 15v6"/></symbol>
+<symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.5 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" fill="currentColor"/></symbol>
 </defs></svg>
 
 <header class="top" id="top">
@@ -92,6 +94,8 @@
     <p class="lab">PRIVASI</p>
     <div class="card2 sw"><svg class="ic lead"><use href="#i-clock"/></svg><span><b>Tampilkan Terakhir Dilihat</b><small>Orang lain bisa lihat kapan kamu terakhir online</small></span><button id="swseen" class="swb" role="switch" aria-checked="true" aria-label="Terakhir dilihat"></button></div>
     <button id="admbtn" class="card2 setr" hidden><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Panel Owner</b><small>Kelola pengguna, banner, dan pengumuman</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="linkbtn" class="card2 setr"><svg class="ic lead"><use href="#i-copy"/></svg><span><b>Link profilku</b><small>Salin link supaya orang bisa menyimpan ID-mu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="starbtn" class="card2 setr"><svg class="ic lead"><use href="#i-star"/></svg><span><b>Pesan berbintang</b><small>Pesan yang kamu beri bintang</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <p class="lab">AKUN</p>
     <button id="pnamebtn" class="card2 setr"><svg class="ic lead"><use href="#i-edit"/></svg><span><b>Ubah nama</b><small>Nama yang dilihat orang lain</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="ppwbtn" class="card2 setr"><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Ubah password</b><small>Ganti password akunmu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
@@ -124,6 +128,7 @@
     <button id="abtn" aria-label="Telpon" title="Telpon"><svg class="ic"><use href="#i-phone"/></svg></button>
     <button id="menubtn" aria-label="Menu" title="Menu"><svg class="ic"><use href="#i-more"/></svg></button>
   </div>
+  <button id="pinbar" class="pinbar" type="button" hidden aria-label="Pesan disematkan"><svg class="ic"><use href="#i-pin"/></svg><span class="pinbody"><b>Disematkan</b><span id="pintext"></span></span><i id="pincount"></i></button>
   <div id="msgs" class="msgs"></div>
   <div id="tray" class="tray" hidden></div>
   <div id="replybar" class="replybar" hidden><div><b id="rpname"></b><span id="rptext"></span></div><button id="rpx" type="button" aria-label="Batal membalas">&times;</button></div>
@@ -168,6 +173,7 @@
     <button id="end" class="danger" aria-label="Akhiri" title="Akhiri"><svg class="ic"><use href="#i-phone"/></svg></button>
   </div>
 </div>
+<script src="extras.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
