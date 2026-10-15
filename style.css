@@ -352,3 +352,10 @@ textarea:focus-visible{outline:3px solid var(--red);outline-offset:2px}
 .irow{display:flex;justify-content:space-between;gap:1rem;border-bottom:2px dashed var(--ink);padding:.35rem 0;font-size:.85rem}
 .irow small{color:var(--mut)}
 .irow b{text-align:right;word-break:break-word}
+
+/* fitur tambahan: zoom foto, log panggilan */
+.zoom{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;cursor:zoom-out}
+.zoom img{max-width:92vw;max-height:78vh;object-fit:contain;border:3px solid var(--ink);background:#fff}
+.zcap{color:#fff;font-size:1rem}
+.callbar{display:flex;justify-content:flex-end;padding:.4rem .8rem 0}
+.callx{background:none;border:0;font-size:1.4rem;line-height:1;cursor:pointer;color:var(--mut);padding:0 .4rem;margin-left:auto}

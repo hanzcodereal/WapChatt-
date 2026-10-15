@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify, send_from_directory, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
-from database import Session, User, Contact, Message, Profile, ProfileExt, Sticker, AppSetting, UserFlag, Story, StoryView, ChatClear, Room, RoomMember, Call, init_db
+from database import Session, User, Contact, Message, Profile, ProfileExt, Sticker, AppSetting, UserFlag, Story, StoryView, ChatClear, ContactName, RoomExt, CallHide, Room, RoomMember, Call, init_db
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
@@ -35,7 +35,7 @@ def new_pid(db):
 
 ID_COLS = [(User, "player_id"), (Contact, "owner"), (Contact, "contact_pid"), (Message, "sender"), (Message, "to_id"),
            (Profile, "player_id"), (ProfileExt, "player_id"), (Story, "owner"), (Room, "owner"),
-           (RoomMember, "player_id"), (Call, "caller"), (Call, "callee"), (StoryView, "viewer"), (ChatClear, "owner"), (ChatClear, "peer")]
+           (RoomMember, "player_id"), (Call, "caller"), (Call, "callee"), (StoryView, "viewer"), (ChatClear, "owner"), (ChatClear, "peer"), (ContactName, "owner"), (ContactName, "contact_pid"), (CallHide, "owner")]
 
 
 def migrate_ids():
@@ -232,7 +232,16 @@ def contacts(db, u):
     ids = [c.contact_pid for c in db.query(Contact).filter_by(owner=u.player_id).order_by(Contact.id.desc())]
     pr = prof(db, ids)
     us = {x.player_id: pub(x, pr) for x in db.query(User).filter(User.player_id.in_(ids))}
-    return jsonify(contacts=[us[i] for i in ids if i in us])
+    names = {n.contact_pid: n.name for n in db.query(ContactName).filter_by(owner=u.player_id)}
+    out = []
+    for i in ids:
+        if i in us:
+            o = dict(us[i])
+            o["real_name"] = o["full_name"]
+            if i in names:
+                o["full_name"] = o["nick"] = names[i]
+            out.append(o)
+    return jsonify(contacts=out)
 
 
 @app.post("/api/contacts")
@@ -280,6 +289,27 @@ def send(db, u):
     return jsonify(m.public())
 
 
+@app.post("/api/contacts/name")
+@authed
+def contact_name(db, u):
+    d = request.get_json(silent=True) or {}
+    pid, name = (d.get("player_id") or "").strip().upper(), (d.get("name") or "").strip()[:100]
+    if pid == u.player_id or not db.query(User.id).filter_by(player_id=pid).first():
+        return jsonify(error="Pengguna tidak ditemukan."), 404
+    if not db.query(Contact.id).filter_by(owner=u.player_id, contact_pid=pid).first():
+        db.add(Contact(owner=u.player_id, contact_pid=pid))
+    n = db.query(ContactName).filter_by(owner=u.player_id, contact_pid=pid).first()
+    if not name:
+        if n:
+            db.delete(n)
+    elif n:
+        n.name = name
+    else:
+        db.add(ContactName(owner=u.player_id, contact_pid=pid, name=name))
+    db.commit()
+    return jsonify(ok=True)
+
+
 @app.post("/api/stickers")
 @authed
 def sticker_up(db, u):
@@ -296,6 +326,7 @@ def sticker_up(db, u):
 def purge_room(db, rid):
     db.query(Message).filter(Message.to_id == "R-%d" % rid).delete(synchronize_session=False)
     db.query(ChatClear).filter(ChatClear.peer == "R-%d" % rid).delete(synchronize_session=False)
+    db.query(RoomExt).filter(RoomExt.room_id == rid).delete(synchronize_session=False)
     db.query(RoomMember).filter(RoomMember.room_id == rid).delete(synchronize_session=False)
     db.query(Room).filter(Room.id == rid).delete(synchronize_session=False)
 
@@ -564,6 +595,11 @@ def ice(db, u):
 @authed
 def profile_post(db, u):
     d = request.get_json(silent=True) or {}
+    if "full_name" in d:
+        nm = (d["full_name"] or "").strip()[:100]
+        if not nm:
+            return jsonify(error="Nama tidak boleh kosong."), 400
+        u.full_name = nm
     p = db.get(Profile, u.player_id) or Profile(player_id=u.player_id)
     e = db.get(ProfileExt, u.player_id) or ProfileExt(player_id=u.player_id, public=True, show_seen=True)
     db.add(p)
@@ -677,13 +713,14 @@ def user_detail(db, u, pid):
     pr = prof(db, [pid])
     d, o, me_ = pr[pid], pub(t, pr), t.id == u.id
     seen = d["last_seen"] if (d["show_seen"] or me_) else None
+    nk = db.query(ContactName).filter_by(owner=u.player_id, contact_pid=pid).first()
     return jsonify(user={
         "player_id": t.player_id, "full_name": t.full_name, "avatar": o["avatar"], "status": o["status"],
         "cover": d["cover"] if (d["public"] or me_) else "", "verified": is_verified(t), "owner": is_owner(t),
         "joined": iso(t.created_at), "seen": iso(seen),
         "online": bool(seen and (datetime.utcnow() - seen).total_seconds() < ONLINE_SEC),
         "saved": bool(db.query(Contact.id).filter_by(owner=u.player_id, contact_pid=pid).first()),
-        "private": not d["public"], "me": me_})
+        "private": not d["public"], "me": me_, "nick": nk.name if nk else ""})
 
 
 @app.get("/api/rooms")
@@ -691,8 +728,9 @@ def user_detail(db, u, pid):
 def rooms_get(db, u):
     mine = {m.room_id for m in db.query(RoomMember).filter_by(player_id=u.player_id)}
     cnt = dict(db.query(RoomMember.room_id, func.count(RoomMember.id)).group_by(RoomMember.room_id).all())
+    ra = {x.room_id: x.avatar or "" for x in db.query(RoomExt)}
     return jsonify(rooms=[{"id": r.id, "kind": r.kind, "name": r.name, "about": r.about, "owner": r.owner,
-                           "count": cnt.get(r.id, 0), "joined": r.id in mine}
+                           "count": cnt.get(r.id, 0), "joined": r.id in mine, "avatar": ra.get(r.id, "")}
                           for r in db.query(Room).order_by(Room.id.desc()) if r.kind == "channel" or r.id in mine])
 
 
@@ -727,14 +765,113 @@ def rooms_join(db, u, rid):
     return jsonify(ok=True)
 
 
+@app.post("/api/rooms/<int:rid>/edit")
+@authed
+def rooms_edit(db, u, rid):
+    r = db.get(Room, rid)
+    if not r or r.owner != u.player_id:
+        return jsonify(error="Hanya pemilik yang bisa mengubah info ini."), 403
+    d = request.get_json(silent=True) or {}
+    if "name" in d:
+        nm = (d["name"] or "").strip()[:60]
+        if not nm:
+            return jsonify(error="Nama wajib diisi."), 400
+        r.name = nm
+    if "about" in d:
+        r.about = (d["about"] or "")[:200]
+    if "avatar" in d:
+        a = d["avatar"] or ""
+        e = db.get(RoomExt, rid) or RoomExt(room_id=rid)
+        e.avatar = a if a.startswith("data:image/") and len(a) < 120000 else ""
+        db.add(e)
+    db.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/rooms/<int:rid>/leave")
+@authed
+def rooms_leave(db, u, rid):
+    r = db.get(Room, rid)
+    m = db.query(RoomMember).filter_by(room_id=rid, player_id=u.player_id).first()
+    if not r or not m:
+        return jsonify(error="Kamu bukan anggota."), 404
+    if r.owner == u.player_id:
+        if r.kind == "channel":
+            return jsonify(error="Pemilik tidak bisa berhenti mengikuti saluran sendiri."), 400
+        nxt = db.query(RoomMember).filter(RoomMember.room_id == rid, RoomMember.player_id != u.player_id) \
+            .order_by(RoomMember.id).first()
+        if not nxt:  # tidak ada anggota lain: grup dihapus
+            purge_room(db, rid)
+            db.commit()
+            return jsonify(ok=True)
+        r.owner = nxt.player_id  # kepemilikan pindah ke anggota tertua
+    db.delete(m)
+    db.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/rooms/<int:rid>/members")
+@authed
+def rooms_add(db, u, rid):
+    r = db.get(Room, rid)
+    if not r or r.kind != "group" or r.owner != u.player_id:
+        return jsonify(error="Hanya pemilik grup yang bisa menambah anggota."), 403
+    have = {m.player_id for m in db.query(RoomMember).filter_by(room_id=rid)}
+    ids = {str(x).strip().upper() for x in ((request.get_json(silent=True) or {}).get("ids") or [])[:50]} - have
+    n = 0
+    for pid in ids:
+        if pid != OFFICIAL and db.query(User.id).filter_by(player_id=pid).first():
+            db.add(RoomMember(room_id=rid, player_id=pid))
+            n += 1
+    db.commit()
+    return jsonify(added=n)
+
+
+@app.get("/api/rooms/<int:rid>/members")
+@authed
+def rooms_members(db, u, rid):
+    r = db.get(Room, rid)
+    if not r or not db.query(RoomMember.id).filter_by(room_id=rid, player_id=u.player_id).first():
+        return jsonify(error="Kamu bukan anggota."), 403
+    ids = [m.player_id for m in db.query(RoomMember).filter_by(room_id=rid).order_by(RoomMember.id)]
+    users = {x.player_id: x for x in db.query(User).filter(User.player_id.in_(ids))}
+    pr = prof(db, ids)
+    out = []
+    for i in ids:
+        if i in users:
+            o = pub(users[i], pr)
+            out.append({"player_id": i, "full_name": o["full_name"], "avatar": o["avatar"],
+                        "verified": o["verified"], "room_owner": i == r.owner})
+    return jsonify(members=out)
+
+
 @app.get("/api/calls")
 @authed
 def calls(db, u):
     me_id = u.player_id
-    rows = db.query(Call).filter(or_(Call.caller == me_id, Call.callee == me_id)).order_by(Call.id.desc()).limit(50).all()
-    return jsonify(calls=[{"peer": c.callee if c.caller == me_id else c.caller, "out": c.caller == me_id,
+    hid = {h.call_id for h in db.query(CallHide).filter_by(owner=me_id)}
+    rows = db.query(Call).filter(or_(Call.caller == me_id, Call.callee == me_id)).order_by(Call.id.desc()).limit(150).all()
+    rows = [c for c in rows if c.id not in hid][:50]
+    return jsonify(calls=[{"id": c.id, "peer": c.callee if c.caller == me_id else c.caller, "out": c.caller == me_id,
                            "video": bool(c.video), "status": c.status,
                            "t": c.created_at.isoformat() + "Z"} for c in rows])
+
+
+@app.post("/api/calls/hide")
+@authed
+def calls_hide(db, u):
+    d = request.get_json(silent=True) or {}
+    me_id = u.player_id
+    q = db.query(Call.id).filter(or_(Call.caller == me_id, Call.callee == me_id))
+    if not d.get("all"):
+        ids = [i for i in (d.get("ids") or [])[:100] if isinstance(i, int)]
+        q = q.filter(Call.id.in_(ids))
+    have = {h.call_id for h in db.query(CallHide).filter_by(owner=me_id)}
+    for (cid,) in q:
+        if cid not in have:
+            db.add(CallHide(owner=me_id, call_id=cid))
+    db.commit()
+    return jsonify(ok=True)
 
 
 @app.get("/")

@@ -70,6 +70,27 @@ class ChatClear(Base):  # "hapus chat" untuk diri sendiri: pesan dengan id <= up
     upto = Column(Integer, nullable=False, default=0)
 
 
+class ContactName(Base):  # nama kontak buatan sendiri (hanya terlihat oleh pemilik)
+    __tablename__ = "contact_names"
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)
+    contact_pid = Column(String(12), nullable=False)
+    name = Column(String(100), nullable=False)
+
+
+class RoomExt(Base):  # foto grup/saluran (tabel baru supaya tidak perlu ALTER)
+    __tablename__ = "room_ext"
+    room_id = Column(Integer, primary_key=True)
+    avatar = Column(Text, default="")
+
+
+class CallHide(Base):  # log panggilan yang dihapus pemilik (hanya hilang dari sisinya)
+    __tablename__ = "call_hides"
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)
+    call_id = Column(Integer, nullable=False, index=True)
+
+
 def init_db():
     Base.metadata.create_all(engine)
 

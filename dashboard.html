@@ -75,7 +75,7 @@
     <ul id="xlist" class="list"></ul>
     <p id="empty-x" class="hint">Belum ada saluran.</p>
   </section>
-  <section id="calls" hidden><ul id="calllist" class="list"></ul><p id="empty-calls" class="hint">Belum ada panggilan. Buka chat teman lalu tap ikon telepon atau video.</p></section>
+  <section id="calls" hidden><div class="callbar"><button id="callclear" class="pill" hidden>Hapus semua log</button></div><ul id="calllist" class="list"></ul><p id="empty-calls" class="hint">Belum ada panggilan. Buka chat teman lalu tap ikon telepon atau video.</p></section>
   <section id="profile" hidden>
     <div class="pcard">
       <div id="pcover" class="cover"><button id="pcov" class="cam" aria-label="Ganti sampul" title="Ganti sampul"><svg class="ic"><use href="#i-camera"/></svg></button></div>
@@ -93,6 +93,7 @@
     <div class="card2 sw"><svg class="ic lead"><use href="#i-clock"/></svg><span><b>Tampilkan Terakhir Dilihat</b><small>Orang lain bisa lihat kapan kamu terakhir online</small></span><button id="swseen" class="swb" role="switch" aria-checked="true" aria-label="Terakhir dilihat"></button></div>
     <button id="admbtn" class="card2 setr" hidden><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Panel Owner</b><small>Kelola pengguna, banner, dan pengumuman</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <p class="lab">AKUN</p>
+    <button id="pnamebtn" class="card2 setr"><svg class="ic lead"><use href="#i-edit"/></svg><span><b>Ubah nama</b><small>Nama yang dilihat orang lain</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="pphoto" class="card2 setr"><svg class="ic lead"><use href="#i-camera"/></svg><span><b>Ganti foto profil</b></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="pdel" class="card2 setr"><svg class="ic lead"><use href="#i-trash"/></svg><span><b>Hapus foto profil</b></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="copy" class="card2 setr"><svg class="ic lead"><use href="#i-copy"/></svg><span><b>Salin ID</b><small id="copysub"></small></span><svg class="ic"><use href="#i-chev"/></svg></button>

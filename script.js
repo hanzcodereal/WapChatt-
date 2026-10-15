@@ -140,7 +140,7 @@ async function initDashboard() {
   const saved = (p) => !!contact(p);
   const OFFICIAL = "NOVA";
   const nameOf = (p) => (p === me.player_id ? me.full_name : p === OFFICIAL ? "WapChatt" : isRoom(p) ? (roomOf(p) || { name: "Grup" }).name : (contact(p) || { full_name: p }).full_name);
-  const imgOf = (p) => (p === me.player_id ? me.avatar : p === OFFICIAL ? "logo.png" : (contact(p) || {}).avatar);
+  const imgOf = (p) => (p === me.player_id ? me.avatar : p === OFFICIAL ? "logo.png" : isRoom(p) ? (roomOf(p) || {}).avatar : (contact(p) || {}).avatar);
   const fmt = (t) => new Date(t).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   const NS = "http://www.w3.org/2000/svg";
   const ic = (n, cls) => { const s = document.createElementNS(NS, "svg"), u = document.createElementNS(NS, "use"); s.setAttribute("class", "ic" + (cls ? " " + cls : "")); u.setAttribute("href", "#i-" + n); s.append(u); return s; };
@@ -204,14 +204,15 @@ async function initDashboard() {
       return b;
     }));
     const E = st.contacts.map((c) => ({ p: c.player_id, n: c.full_name, i: c.avatar, k: "dm", v: c.verified, tag: c.owner ? "OWNER" : "" }));
-    st.rooms.filter((r) => r.kind === "group" || r.joined).forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind }));
+    st.rooms.filter((r) => r.kind === "group" || r.joined).forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind, i: r.avatar }));
+    E.push({ p: me.player_id, n: "Catatan saya", i: me.avatar, k: "dm", tag: "KAMU" });
     Object.keys(st.last).forEach((k) => { if (!isRoom(k) && !saved(k) && k !== me.player_id) E.push({ p: k, n: nameOf(k), i: imgOf(k), k: "dm", v: k === OFFICIAL, tag: k === OFFICIAL ? "RESMI" : "" }); });
     const F = E.filter((e) => (st.filter === "all" || e.k === st.filter) && (e.n + e.p).toLowerCase().includes(q))
       .sort((a, b) => (Date.parse(st.lastT[b.p]) || 0) - (Date.parse(st.lastT[a.p]) || 0));
     $("#empty-list").hidden = F.length > 0;
     $("#empty-list").textContent = E.length ? "Tidak ada chat yang cocok." : "Belum ada chat. Tap + lalu masukkan ID temanmu untuk menyimpannya.";
     $("#list").replaceChildren(...F.map((e) => row(e.i, e.n, lastText(st.last[e.p]) || (e.k === "dm" ? e.p : e.k === "group" ? "Grup" : "Saluran"), () => open(e.p),
-      { time: st.lastT[e.p] ? short(st.lastT[e.p]) : "", badge: st.unread[e.p] || "", verified: e.v, tag: e.tag, avEl: e.k === "dm" ? null : chAv(e.k), online: e.k === "dm" && !!(st.seen[e.p] && st.seen[e.p].online) })));
+      { time: st.lastT[e.p] ? short(st.lastT[e.p]) : "", badge: st.unread[e.p] || "", verified: e.v, tag: e.tag, avEl: e.k === "dm" || e.i ? null : chAv(e.k), online: e.k === "dm" && !!(st.seen[e.p] && st.seen[e.p].online) })));
 
     /* Pembaruan: kartu status */
     const card = (o, label, onclick) => {
@@ -228,8 +229,8 @@ async function initDashboard() {
 
     /* Saluran */
     const chs = st.rooms.filter((r) => r.kind === "channel");
-    const chRow = (r) => row(null, r.name, r.count + " pengikut" + (r.about ? " · " + r.about : ""), () => (r.joined ? open("R-" + r.id) : joinCh(r.id)),
-      { avEl: chAv("channel"), badge: r.owner === me.player_id ? "ADMIN" : st.unread["R-" + r.id] || "", icon: r.joined ? null : ic("plus", "pbtn") });
+    const chRow = (r) => row(r.avatar || null, r.name, r.count + " pengikut" + (r.about ? " · " + r.about : ""), () => (r.joined ? open("R-" + r.id) : joinCh(r.id)),
+      { avEl: r.avatar ? null : chAv("channel"), badge: r.owner === me.player_id ? "ADMIN" : st.unread["R-" + r.id] || "", icon: r.joined ? null : ic("plus", "pbtn") });
     const mineCh = chs.filter((r) => r.joined), finds = chs.filter((r) => !r.joined);
     $("#mych").replaceChildren(...mineCh.map(chRow));
     $("#find-h").hidden = !finds.length;
@@ -241,6 +242,13 @@ async function initDashboard() {
     const ST = { answered: "Terjawab", missed: "Tidak terjawab", rejected: "Ditolak" };
     $("#calllist").replaceChildren(...st.calls.map((c) => row(imgOf(c.peer), nameOf(c.peer), (c.out ? "Keluar" : "Masuk") + " · " + (c.video ? "Video" : "Suara") + " · " + ST[c.status], () => open(c.peer), { time: short(c.t), icon: ic(c.video ? "video" : "phone", c.status !== "answered" && !c.out ? "miss" : "") })));
     $("#empty-calls").hidden = st.calls.length > 0;
+    $("#callclear").hidden = !st.calls.length;
+    [...$("#calllist").children].forEach((li, i) => {
+      const c = st.calls[i]; if (!c || !c.id) return;
+      const x = mk("button", "\u00d7", "callx"); x.type = "button"; x.setAttribute("aria-label", "Hapus log panggilan");
+      x.onclick = (e) => { e.stopPropagation(); hideCalls([c.id]); }; x.onkeydown = (e) => e.stopPropagation();
+      li.append(x);
+    });
     $("#pav").replaceChildren(av(me.full_name, me.avatar));
     $("#pname").textContent = me.full_name; $("#pstat").textContent = me.status || "Belum ada status";
     $("#pid").textContent = me.player_id;
@@ -288,6 +296,7 @@ async function initDashboard() {
   }
   function roomSub() {
     if (!st.cur || isRoom(st.cur)) return;
+    if (st.cur === me.player_id) { $("#rid").className = ""; $("#rid").textContent = "Pesan untuk dirimu sendiri"; return; }
     if (st.cur === OFFICIAL) { $("#rid").className = ""; $("#rid").textContent = "Akun resmi · hanya pengumuman"; return; }
     const s = st.seen[st.cur], el = $("#rid");
     el.className = s && s.online ? "on" : "";
@@ -319,6 +328,7 @@ async function initDashboard() {
     if (sid) { const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
     else { if (rp.id) box.append(quote(rp.id)); box.append(mk("span", rp.text)); }
     if (!$("#form").hidden) { const rb = mk("button", "\u21A9", "rpl"); rb.type = "button"; rb.title = rb.ariaLabel = "Balas"; rb.onclick = (e) => { e.stopPropagation(); const id = +d.dataset.mid; if (!id) return toast("Tunggu pesan terkirim dulu"); startReply(id); }; mt.append(rb); }
+    if (sid && !mine) { const sb = mk("button", "simpan", "rpl"); sb.type = "button"; sb.onclick = (e) => { e.stopPropagation(); saveSticker(sid); }; mt.append(sb); }
     if (mine) {
       const xb = mk("button", "hapus", "rpl"); xb.type = "button";
       xb.onclick = async (e) => {
@@ -337,12 +347,12 @@ async function initDashboard() {
   async function open(p) {
     st.cur = p; st.unread[p] = 0;
     const r = roomOf(p);
-    $("#rtitle").textContent = nameOf(p);
+    $("#rtitle").textContent = p === me.player_id ? "Catatan saya" : nameOf(p);
     const ct = contact(p); if (ct && ct.owner) $("#rtitle").append(mk("i", "OWNER", "own")); if (p === OFFICIAL) $("#rtitle").append(mk("i", "RESMI", "own"));
     $("#rav").replaceChildren(av(nameOf(p), imgOf(p)));
-    $("#rid").className = ""; $("#rid").textContent = r ? (r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut") : p;
+    $("#rid").className = ""; $("#rid").textContent = r ? (r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut") : p === me.player_id ? "Pesan untuk dirimu sendiri" : p;
     roomSub(); $("#tray").hidden = true;
-    $("#savebtn").hidden = !!r || saved(p) || p === OFFICIAL; $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL;
+    $("#savebtn").hidden = !!r || saved(p) || p === OFFICIAL || p === me.player_id; $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL || p === me.player_id;
     $("#form").hidden = (!!r && r.kind === "channel" && r.owner !== me.player_id) || p === OFFICIAL;
     st.byId = {}; stopReply(); $("#msgs").replaceChildren(); show("room");
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
@@ -720,10 +730,12 @@ async function initDashboard() {
     const off = pid === OFFICIAL;
     sheet("Detail profil", (box, close) => {
       const cv = mk("div", null, "pcover"); if (u.cover) cv.style.backgroundImage = 'url("' + u.cover + '")';
-      const top = mk("div", null, "ptop"), nm = mk("b", u.full_name, "pname");
+      const top = mk("div", null, "ptop"), nm = mk("b", u.nick || u.full_name, "pname");
       if (u.verified) nm.append(ic("seal"));
       if (off) nm.append(mk("i", "RESMI", "own")); else if (u.owner) nm.append(mk("i", "OWNER", "own"));
-      top.append(av(u.full_name, off ? "logo.png" : u.avatar), nm);
+      const pimg = off ? "logo.png" : u.avatar, pa = av(u.nick || u.full_name, pimg);
+      if (pimg) { pa.style.cursor = "zoom-in"; pa.title = "Perbesar foto"; pa.onclick = () => zoom(pimg, u.nick || u.full_name); }
+      top.append(pa, nm); if (u.nick) top.append(mk("small", "Nama asli: " + u.full_name));
       box.append(cv, top, irow("ID", u.player_id));
       if (!off) {
         box.append(irow("Status", u.status || (u.private ? "Profil privat" : "-")), irow("Bergabung", dshort(u.joined)),
@@ -731,6 +743,8 @@ async function initDashboard() {
         if (!u.me && !u.saved) { const b = mk("button", "Simpan ID", "btn full ghost"); b.type = "button"; b.onclick = () => saveId(pid).then(close); box.append(b); }
         if (!u.me && st.cur !== pid) { const b = mk("button", "Kirim pesan", "btn full"); b.type = "button"; b.onclick = () => { close(); open(pid); }; box.append(b); }
         if (hasStory(pid)) { const b = mk("button", "Lihat status", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); viewStories(pid); }; box.append(b); }
+        if (u.me) { const b = mk("button", "Ubah nama", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); renameMe(); }; box.append(b); }
+        else { const b = mk("button", "Ubah nama kontak", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); renameContact(pid, u.nick); }; box.append(b); }
         if (me.is_owner) {
           const b = mk("button", u.verified ? "Cabut centang biru" : "Beri centang biru", "btn full ghost"); b.type = "button";
           b.onclick = async () => {
@@ -751,11 +765,82 @@ async function initDashboard() {
     render(); toast("Chat dihapus");
   }
   const clearBtn = (key, close) => { const b = mk("button", "Hapus chat", "btn full"); b.type = "button"; b.onclick = () => { close(); clearChat(key); }; return b; };
+  function zoom(src, cap) {
+    const b = mk("div", null, "zoom"), im = mk("img");
+    im.src = src; im.alt = cap || "";
+    const k = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const close = () => { document.removeEventListener("keydown", k, true); b.remove(); };
+    document.addEventListener("keydown", k, true);
+    b.onclick = close; b.append(im, mk("b", cap || "", "zcap")); document.body.append(b);
+  }
+  async function renameMe() {
+    const r = await dialog({ title: "Ubah nama", desc: "Nama ini terlihat oleh semua orang.", fields: [{ name: "n", label: "Nama", value: me.full_name, max: 100, required: true }], ok: "Simpan" });
+    if (r && r.n.trim()) saveProfile({ full_name: r.n.trim() });
+  }
+  async function renameContact(pid, cur) {
+    const r = await dialog({ title: "Nama kontak", desc: "Nama ini hanya terlihat olehmu. Kosongkan untuk memakai nama asli.", fields: [{ name: "n", label: "Nama", value: cur || "", max: 100 }], ok: "Simpan" });
+    if (!r) return;
+    try { await api("/contacts/name", { method: "POST", body: JSON.stringify({ player_id: pid, name: r.n }) }); await loadContacts(); if (st.cur === pid) $("#rtitle").textContent = nameOf(pid); }
+    catch (e) { toast(e.message); }
+  }
+  async function hideCalls(ids) {
+    try { await api("/calls/hide", { method: "POST", body: JSON.stringify(ids ? { ids } : { all: true }) }); await loadCalls(); } catch (e) { toast(e.message); }
+  }
+  async function saveSticker(sid) {
+    try {
+      const r = await fetch("/api/stickers/" + sid); if (!r.ok) throw new Error("x");
+      const blob = await r.blob();
+      const src = await new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(f.result); f.onerror = rej; f.readAsDataURL(blob); });
+      const a = mySt(); if (a.includes(src)) return toast("Stiker sudah ada di koleksimu");
+      a.unshift(src); if (saveMySt(a)) toast("Stiker disimpan");
+    } catch { toast("Gagal menyimpan stiker."); }
+  }
+  function refreshRoomHead() {
+    const r = st.cur && roomOf(st.cur); if (!r) return;
+    $("#rtitle").textContent = r.name; $("#rav").replaceChildren(av(r.name, r.avatar));
+    $("#rid").textContent = r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut";
+  }
+  async function roomCall(r, path, body, msg) {
+    try { await api("/rooms/" + r.id + "/" + path, { method: "POST", body: JSON.stringify(body || {}) }); await loadRooms(); refreshRoomHead(); if (msg) toast(msg); return true; }
+    catch (e) { toast(e.message); return false; }
+  }
+  async function showMembers(r) {
+    let v; try { v = (await api("/rooms/" + r.id + "/members")).members; } catch (e) { return toast(e.message); }
+    sheet((r.kind === "group" ? "Anggota grup" : "Pengikut saluran") + " (" + v.length + ")", (box, close) => {
+      const ul = mk("ul", null, "list");
+      v.forEach((x) => ul.append(row(x.avatar, x.player_id === me.player_id ? "Kamu" : nameOf(x.player_id) === x.player_id ? x.full_name : nameOf(x.player_id), x.room_owner ? "Pemilik" : x.player_id, () => { close(); showProfile(x.player_id); }, { verified: x.verified, tag: x.room_owner ? "ADMIN" : "" })));
+      box.append(ul);
+    });
+  }
   function showRoomInfo(r) {
+    const key = "R-" + r.id, group = r.kind === "group", owner = r.owner === me.player_id, kindName = group ? "grup" : "saluran";
     sheet(r.name, (box, close) => {
-      box.append(mk("p", r.about || "Belum ada deskripsi.", "dlg-d"), irow("Jenis", r.kind === "group" ? "Grup" : "Saluran"), irow(r.kind === "group" ? "Anggota" : "Pengikut", String(r.count)));
-      const o = mk("button", "Pemilik: " + nameOf(r.owner), "btn full ghost"); o.type = "button"; o.onclick = () => showProfile(r.owner); box.append(o);
-      if (roomOf("R-" + r.id)) box.append(clearBtn("R-" + r.id, close));
+      const top = mk("div", null, "ptop"), pa = av(r.name, r.avatar);
+      if (r.avatar) { pa.style.cursor = "zoom-in"; pa.title = "Perbesar foto"; pa.onclick = () => zoom(r.avatar, r.name); }
+      top.style.marginTop = "0"; top.append(pa); box.append(top, mk("p", r.about || "Belum ada deskripsi.", "dlg-d"), irow("Jenis", group ? "Grup" : "Saluran"), irow(group ? "Anggota" : "Pengikut", String(r.count)));
+      const act = (label, fn, ghost = true) => { const b = mk("button", label, "btn full" + (ghost ? " ghost" : "")); b.type = "button"; b.onclick = () => { close(); fn(); }; box.append(b); };
+      act(group ? "Lihat anggota" : "Lihat pengikut", () => showMembers(r));
+      act("Pemilik: " + nameOf(r.owner), () => showProfile(r.owner));
+      if (owner) {
+        act("Edit nama dan deskripsi", async () => {
+          const x = await dialog({ title: "Edit " + kindName, fields: [{ name: "name", label: "Nama", value: r.name, max: 60, required: true }, { name: "about", label: "Deskripsi", value: r.about || "", max: 200, multiline: true }], ok: "Simpan" });
+          if (x) roomCall(r, "edit", { name: x.name, about: x.about }, "Info diperbarui");
+        });
+        act("Ganti foto " + kindName, async () => { const img = await pick(320, 0.8, 110000); if (img) roomCall(r, "edit", { avatar: img }, "Foto diperbarui"); });
+        if (r.avatar) act("Hapus foto " + kindName, () => roomCall(r, "edit", { avatar: "" }, "Foto dihapus"));
+        if (group) act("Tambah anggota", async () => {
+          const x = await dialog({ title: "Tambah anggota", fields: [{ name: "extra", label: "ID lain (opsional, pisah koma)", placeholder: "48210377, 63915204", inputmode: "numeric" }], contacts: st.contacts, ok: "Tambahkan" });
+          if (!x) return;
+          const ids = [...new Set([...x.members, ...x.extra.split(",").map((i) => i.trim()).filter(Boolean)])];
+          if (!ids.length) return toast("Pilih atau isi ID dulu.");
+          try { const res = await api("/rooms/" + r.id + "/members", { method: "POST", body: JSON.stringify({ ids }) }); await loadRooms(); refreshRoomHead(); toast(res.added ? res.added + " anggota ditambahkan" : "Semuanya sudah jadi anggota"); } catch (e) { toast(e.message); }
+        });
+      }
+      if (group || !owner) act(group ? "Keluar grup" : "Berhenti mengikuti", async () => {
+        if (!(await dialog({ title: group ? "Keluar dari grup?" : "Berhenti mengikuti?", desc: group && owner ? "Kepemilikan grup akan pindah ke anggota lain." : "Kamu tidak akan menerima pesan dari " + r.name + " lagi.", ok: group ? "Keluar" : "Berhenti" }))) return;
+        if (await roomCall(r, "leave")) { delete st.last[key]; delete st.lastT[key]; if (st.cur === key) { st.cur = null; show(st.tab); } render(); }
+      }, false);
+      box.append(clearBtn(key, close));
     });
   }
   const headTap = () => { if (!st.cur) return; const r = roomOf(st.cur); r ? showRoomInfo(r) : showProfile(st.cur); };
@@ -785,13 +870,15 @@ async function initDashboard() {
 
   /* ----- profil ----- */
   async function saveProfile(patch) { try { me = (await api("/profile", { method: "POST", body: JSON.stringify(patch) })).user; render(); } catch (e) { toast(e.message); } }
-  $("#pphoto").onclick = async () => saveProfile({ avatar: await pick(160, 0.75, 140000) });
+  $("#pphoto").onclick = async () => saveProfile({ avatar: await pick(320, 0.8, 140000) });
   $("#pcov").onclick = async () => saveProfile({ cover: await pick(720, 0.6, 190000) });
   $("#swpub").onclick = () => saveProfile({ public: me.public === false });
   $("#swseen").onclick = () => saveProfile({ show_seen: me.show_seen === false });
   $("#pedit").onclick = () => $("#pst").click();
   $("#pavb").onclick = () => $("#pphoto").click();
   $("#pdel").onclick = () => saveProfile({ avatar: "" });
+  $("#pnamebtn").onclick = () => renameMe();
+  $("#callclear").onclick = async () => { if (await dialog({ title: "Hapus log panggilan?", desc: "Semua riwayat panggilan dihapus dari akunmu saja.", ok: "Hapus semua" })) hideCalls(); };
   $("#pst").onclick = async () => {
     const r = await dialog({ title: "Ubah status", fields: [{ name: "s", label: "Status kamu", value: me.status || "", max: 80, placeholder: "Contoh: sibuk" }], ok: "Simpan" });
     if (r) saveProfile({ status: r.s });
@@ -1009,6 +1096,7 @@ async function initDashboard() {
       last = r.last;
       r.events.forEach((m) => {
         if (m.kind === "sig") return signal(m.sender, JSON.parse(m.body));
+        if (m.sender === me.player_id) return;  // chat ke diri sendiri: sudah tampil saat dikirim
         const key = isRoom(m.to) ? m.to : m.sender;
         if (isRoom(key) && !roomOf(key)) loadRooms();
         if (st.cur === key && !$("#room").hidden) addMsg(m);
