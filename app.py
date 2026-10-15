@@ -220,6 +220,20 @@ def login():
         return jsonify(token=ser.dumps(u.id), user=u.public())
 
 
+@app.post("/api/password")
+@authed
+def password_change(db, u):
+    d = request.get_json(silent=True) or {}
+    if not bcrypt.checkpw((d.get("old") or "").encode(), u.password_hash.encode()):
+        return jsonify(error="Password lama salah."), 400
+    new = d.get("new") or ""
+    if len(new) < 6:
+        return jsonify(error="Password baru minimal 6 karakter."), 400
+    u.password_hash = bcrypt.hashpw(new.encode(), bcrypt.gensalt()).decode()
+    db.commit()
+    return jsonify(ok=True)
+
+
 @app.get("/api/me")
 @authed
 def me(db, u):
@@ -409,6 +423,18 @@ def adm_verify(db, u, pid):
         return err
     set_flag(db, t.player_id, verified=bool((request.get_json(silent=True) or {}).get("value")))
     return jsonify(ok=True)
+
+
+@app.post("/api/admin/users/<pid>/resetpw")
+@owner_only
+def adm_resetpw(db, u, pid):
+    t, err = target_user(db, u, pid)
+    if err:
+        return err
+    tmp = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+    t.password_hash = bcrypt.hashpw(tmp.encode(), bcrypt.gensalt()).decode()
+    db.commit()
+    return jsonify(password=tmp)
 
 
 @app.post("/api/admin/users/<pid>/block")
@@ -676,6 +702,18 @@ def stories_post(db, u):
     db.add(Story(owner=u.player_id, kind=kind, body=body))
     db.commit()
     return jsonify(ok=True), 201
+
+
+@app.delete("/api/stories/<int:sid>")
+@authed
+def story_delete(db, u, sid):
+    s = db.get(Story, sid)
+    if not s or s.owner != u.player_id:
+        return jsonify(error="Status tidak ditemukan."), 404
+    db.query(StoryView).filter_by(story_id=sid).delete(synchronize_session=False)
+    db.delete(s)
+    db.commit()
+    return jsonify(ok=True)
 
 
 @app.post("/api/stories/<int:sid>/view")

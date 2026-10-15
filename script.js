@@ -76,7 +76,7 @@ async function initDashboard() {
   const lastText = (b) => (stkId(b) ? "Stiker" : parseRe(b).text);
   const sha24 = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].slice(0, 12).map((x) => x.toString(16).padStart(2, "0")).join("");
   /* Kotak dialog bergaya WapChatt, pengganti prompt() bawaan browser. Hasil: objek isian, atau null kalau dibatalkan. */
-  function dialog({ title, desc, fields = [], contacts = null, ok = "Simpan", actions = [] }) {
+  function dialog({ title, desc, fields = [], contacts = null, contactsLabel = "", ok = "Simpan", actions = [] }) {
     return new Promise((resolve) => {
       const prev = document.activeElement;
       const back = mk("div", null, "dlg-back"), box = mk("div", null, "dlg"), form = mk("form");
@@ -91,13 +91,14 @@ async function initDashboard() {
         if (f.max) inp.maxLength = f.max;
         if (f.multiline) inp.rows = 4;
         if (f.inputmode) inp.inputMode = f.inputmode;
+        if (f.type) inp.type = f.type;
         lab.append(mk("span", f.label), inp);
         if (f.multiline && f.max) { const c = mk("small", inp.value.length + "/" + f.max, "dlg-c"); inp.addEventListener("input", () => (c.textContent = inp.value.length + "/" + f.max)); lab.append(c); }
         form.append(lab); els[f.name] = inp;
       });
       const checks = [];
       if (contacts) {
-        form.append(mk("span", "Tambah anggota dari teman tersimpan", "dlg-l"));
+        form.append(mk("span", contactsLabel || "Tambah anggota dari teman tersimpan", "dlg-l"));
         if (!contacts.length) form.append(mk("p", "Belum ada teman tersimpan. Simpan ID teman dulu, atau isi ID lain di atas.", "dlg-d"));
         else {
           const list = mk("div", null, "dlg-pick");
@@ -208,11 +209,12 @@ async function initDashboard() {
     E.push({ p: me.player_id, n: "Catatan saya", i: me.avatar, k: "dm", tag: "KAMU" });
     Object.keys(st.last).forEach((k) => { if (!isRoom(k) && !saved(k) && k !== me.player_id) E.push({ p: k, n: nameOf(k), i: imgOf(k), k: "dm", v: k === OFFICIAL, tag: k === OFFICIAL ? "RESMI" : "" }); });
     const F = E.filter((e) => (st.filter === "all" || e.k === st.filter) && (e.n + e.p).toLowerCase().includes(q))
-      .sort((a, b) => (Date.parse(st.lastT[b.p]) || 0) - (Date.parse(st.lastT[a.p]) || 0));
+      .sort((a, b) => (isPinned(b.p) - isPinned(a.p)) || ((Date.parse(st.lastT[b.p]) || 0) - (Date.parse(st.lastT[a.p]) || 0)));
     $("#empty-list").hidden = F.length > 0;
     $("#empty-list").textContent = E.length ? "Tidak ada chat yang cocok." : "Belum ada chat. Tap + lalu masukkan ID temanmu untuk menyimpannya.";
     $("#list").replaceChildren(...F.map((e) => row(e.i, e.n, lastText(st.last[e.p]) || (e.k === "dm" ? e.p : e.k === "group" ? "Grup" : "Saluran"), () => open(e.p),
       { time: st.lastT[e.p] ? short(st.lastT[e.p]) : "", badge: st.unread[e.p] || "", verified: e.v, tag: e.tag, avEl: e.k === "dm" || e.i ? null : chAv(e.k), online: e.k === "dm" && !!(st.seen[e.p] && st.seen[e.p].online) })));
+    [...$("#list").children].forEach((li, i) => { if (F[i] && isPinned(F[i].p)) { li.classList.add("pinned"); li.append(mk("small", "Disematkan", "pinmark")); } });
 
     /* Pembaruan: kartu status */
     const card = (o, label, onclick) => {
@@ -250,7 +252,7 @@ async function initDashboard() {
       li.append(x);
     });
     $("#pav").replaceChildren(av(me.full_name, me.avatar));
-    $("#pname").textContent = me.full_name; $("#pstat").textContent = me.status || "Belum ada status";
+    $("#pname").textContent = me.full_name; $("#pstat").textContent = me.status || "Belum ada bio";
     $("#pid").textContent = me.player_id;
     $("#pcover").style.backgroundImage = me.cover ? 'url("' + me.cover + '")' : "";
     $("#pver").toggleAttribute("hidden", !me.verified); $("#pown").hidden = !me.owner; $("#admbtn").hidden = !me.is_owner; $("#pvb").toggleAttribute("hidden", !me.verified); $("#copysub").textContent = me.player_id;
@@ -352,7 +354,7 @@ async function initDashboard() {
     $("#rav").replaceChildren(av(nameOf(p), imgOf(p)));
     $("#rid").className = ""; $("#rid").textContent = r ? (r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut") : p === me.player_id ? "Pesan untuk dirimu sendiri" : p;
     roomSub(); $("#tray").hidden = true;
-    $("#savebtn").hidden = !!r || saved(p) || p === OFFICIAL || p === me.player_id; $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL || p === me.player_id;
+    $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL || p === me.player_id;
     $("#form").hidden = (!!r && r.kind === "channel" && r.owner !== me.player_id) || p === OFFICIAL;
     st.byId = {}; stopReply(); $("#msgs").replaceChildren(); show("room");
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
@@ -437,10 +439,10 @@ async function initDashboard() {
     try {
       await api("/contacts", { method: "POST", body: JSON.stringify({ player_id: id }) });
       await loadContacts();
-      if (st.cur) { $("#rtitle").textContent = nameOf(st.cur); $("#savebtn").hidden = saved(st.cur); }
+      if (st.cur) { $("#rtitle").textContent = nameOf(st.cur); }
     } catch (e) { toast(e.message); }
   }
-  $("#savebtn").onclick = () => saveId(st.cur);
+  $("#menubtn").onclick = () => chatMenu();
   async function mkRoom(body) { try { await api("/rooms", { method: "POST", body: JSON.stringify(body) }); loadRooms(); } catch (e) { toast(e.message); } }
   $("#newgrp").onclick = async () => {
     const r = await dialog({ title: "Buat grup", fields: [
@@ -738,7 +740,7 @@ async function initDashboard() {
       top.append(pa, nm); if (u.nick) top.append(mk("small", "Nama asli: " + u.full_name));
       box.append(cv, top, irow("ID", u.player_id));
       if (!off) {
-        box.append(irow("Status", u.status || (u.private ? "Profil privat" : "-")), irow("Bergabung", dshort(u.joined)),
+        box.append(irow("Bio", u.status || (u.private ? "Profil privat" : "-")), irow("Bergabung", dshort(u.joined)),
           irow("Terakhir dilihat", u.online ? "online" : u.seen ? ago(u.seen) : "disembunyikan"));
         if (!u.me && !u.saved) { const b = mk("button", "Simpan ID", "btn full ghost"); b.type = "button"; b.onclick = () => saveId(pid).then(close); box.append(b); }
         if (!u.me && st.cur !== pid) { const b = mk("button", "Kirim pesan", "btn full"); b.type = "button"; b.onclick = () => { close(); open(pid); }; box.append(b); }
@@ -756,6 +758,31 @@ async function initDashboard() {
       }
       if (!u.me) box.append(clearBtn(pid, close));
     });
+  }
+  const PK = "wc_pins_" + me.player_id;
+  const pins = () => { try { return JSON.parse(localStorage.getItem(PK)) || []; } catch { return []; } };
+  const isPinned = (k) => pins().includes(k);
+  function togglePin(k) {
+    let a = pins(), on = !a.includes(k);
+    if (on) { if (a.length >= 5) return toast("Maksimal 5 chat disematkan"); a.unshift(k); } else a = a.filter((x) => x !== k);
+    try { localStorage.setItem(PK, JSON.stringify(a)); } catch {}
+    render(); toast(on ? "Chat disematkan" : "Sematan dilepas");
+  }
+  async function chatMenu() {
+    const p = st.cur; if (!p) return;
+    const r = roomOf(p), self = p === me.player_id, off = p === OFFICIAL, acts = [];
+    if (r) acts.push({ key: "info", label: r.kind === "group" ? "Info grup" : "Info saluran" }, { key: "members", label: r.kind === "group" ? "Anggota grup" : "Pengikut saluran" });
+    else if (!self) {
+      acts.push({ key: "profile", label: "Lihat profil" });
+      if (!off && !saved(p)) acts.push({ key: "save", label: "Simpan ID" });
+      if (!off) acts.push({ key: "nick", label: "Ubah nama kontak" }, { key: "vcall", label: "Video call" }, { key: "acall", label: "Telepon" });
+    }
+    acts.push({ key: "pin", label: isPinned(p) ? "Lepas sematan chat" : "Sematkan chat" }, { key: "clear", label: "Hapus chat", danger: true });
+    const x = await dialog({ title: r ? r.name : self ? "Catatan saya" : nameOf(p), ok: null, actions: acts });
+    if (!x) return;
+    ({ info: () => showRoomInfo(r), members: () => showMembers(r), profile: () => showProfile(p), save: () => saveId(p),
+      nick: () => renameContact(p, (contact(p) || {}).nick), vcall: () => call(true), acall: () => call(false),
+      pin: () => togglePin(p), clear: () => clearChat(p) })[x.action]();
   }
   async function clearChat(key) {
     if (!(await dialog({ title: "Hapus chat?", desc: "Seluruh isi chat ini dihapus dari akunmu saja. Lawan bicara tetap menyimpannya, dan pesan baru akan muncul lagi.", ok: "Hapus chat" }))) return;
@@ -853,11 +880,19 @@ async function initDashboard() {
       const s = list[i], b = $("#svbody"); b.replaceChildren();
       const mineS = s.owner === me.player_id;
       if (!mineS && !seenSt.has(s.id)) { seenSt.add(s.id); api("/stories/" + s.id + "/view", { method: "POST" }).catch(() => {}); }
-      $("#svviews").hidden = !mineS;
+      $("#svviews").hidden = $("#svdel").hidden = !mineS;
       if (mineS) {
         $("#svvn").textContent = "...";
         api("/stories/" + s.id + "/views").then((r) => { if (list[i] === s) $("#svvn").textContent = r.views.length; }).catch(() => {});
         $("#svviews").onclick = () => showViewers(s);
+        $("#svdel").onclick = async () => {
+          if (!(await dialog({ title: "Hapus status ini?", desc: "Status dihapus dan tidak bisa dilihat lagi.", ok: "Hapus" }))) return;
+          try {
+            await api("/stories/" + s.id, { method: "DELETE" });
+            list.splice(i, 1); await loadStories();
+            if (!list.length) $("#sv").hidden = true; else { if (i >= list.length) i = list.length - 1; draw(); }
+          } catch (e) { toast(e.message); }
+        };
       }
       if (s.kind === "img") { const im = mk("img"); im.src = s.body; b.append(im); b.style.background = "#000"; }
       else { b.append(mk("p", s.body)); b.style.background = "hsl(" + hue(s.body) + ",85%,78%)"; }
@@ -878,25 +913,35 @@ async function initDashboard() {
   $("#pavb").onclick = () => $("#pphoto").click();
   $("#pdel").onclick = () => saveProfile({ avatar: "" });
   $("#pnamebtn").onclick = () => renameMe();
+  $("#ppwbtn").onclick = async () => {
+    const r = await dialog({ title: "Ubah password", fields: [{ name: "o", label: "Password lama", type: "password" }, { name: "n", label: "Password baru (min. 6 karakter)", type: "password" }], ok: "Ganti" });
+    if (!r) return;
+    try { await api("/password", { method: "POST", body: JSON.stringify({ old: r.o, new: r.n }) }); toast("Password diganti"); } catch (e) { toast(e.message); }
+  };
   $("#callclear").onclick = async () => { if (await dialog({ title: "Hapus log panggilan?", desc: "Semua riwayat panggilan dihapus dari akunmu saja.", ok: "Hapus semua" })) hideCalls(); };
   $("#pst").onclick = async () => {
-    const r = await dialog({ title: "Ubah status", fields: [{ name: "s", label: "Status kamu", value: me.status || "", max: 80, placeholder: "Contoh: sibuk" }], ok: "Simpan" });
+    const r = await dialog({ title: "Ubah bio", fields: [{ name: "s", label: "Bio kamu", value: me.status || "", max: 80, placeholder: "Ceritakan tentang dirimu" }], ok: "Simpan" });
     if (r) saveProfile({ status: r.s });
   };
 
-  /* ----- WebRTC native: STUN Google, signaling lewat /api/send + /api/poll ----- */
+  /* ----- WebRTC native (mesh, sampai 4 orang): STUN/TURN dari /api/ice, signaling lewat /api/send + /api/poll ----- */
   let ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
   api("/ice").then((r) => r.iceServers && (ICE = { iceServers: r.iceServers })).catch(() => {});
-  let pc, stream, peer, pend = [], offer, video = true, facing = "user", sdpSent = false, t0 = 0, tmr, conT, ringT, ringCtx;
-  const sig = (type, data) => send(peer, "sig", JSON.stringify({ type, data })).catch(() => {});
+  const MAXP = 4;
+  const peers = {};              // ID teman -> { pc, pend, sdpSent, up, tile, conT }
+  const expected = new Set();    // peserta yang diundang anggota panggilan lain: offer-nya diterima otomatis
+  let stream, incoming = null, video = true, facing = "user", t0 = 0, tmr, ringT, ringCtx;
+  const peerIds = () => Object.keys(peers);
+  const inCall = () => !$("#call").hidden;
+  const sigTo = (to, type, data) => send(to, "sig", JSON.stringify({ type, data })).catch(() => {});
   const fmtT = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
-  function showPeer(p, label) {
+  function showHead(p, label) {  // layar sebelum tersambung
     $("#cav").replaceChildren(av(nameOf(p), imgOf(p))); $("#cname").textContent = $("#ctopn").textContent = nameOf(p);
     $("#cstat").textContent = label; $("#ctime").textContent = "";
   }
-  function started() {  // dipanggil saat koneksi benar-benar tersambung
+  function started() {  // dipanggil saat sambungan pertama benar-benar tersambung
     if (t0) return;
-    t0 = Date.now(); clearTimeout(conT); stopRing(); $("#call").classList.add("on");
+    t0 = Date.now(); stopRing(); $("#call").classList.add("on");
     const upd = () => { const t = fmtT(Math.floor((Date.now() - t0) / 1000)); $("#cstat").textContent = t; $("#ctime").textContent = t; };
     upd(); tmr = setInterval(upd, 1000);
   }
@@ -921,109 +966,180 @@ async function initDashboard() {
     $("#mute").classList.remove("off"); $("#cam").classList.remove("off");
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: video && { facingMode: facing } });
     $("#local").srcObject = stream; $("#local").play().catch(() => {});
-    $("#local").hidden = $("#cam").hidden = $("#flip").hidden = !video;
-    $("#call").classList.toggle("vid", video); $("#call").classList.remove("live", "on");
+    $("#local").hidden = $("#cam").hidden = $("#flip").hidden = !video; $("#lav").hidden = true;
+    $("#lav").replaceChildren(av(me.full_name, me.avatar));
+    $("#call").classList.toggle("vid", video); $("#call").classList.remove("on");
   }
-  const R = $("#remote"), A = $("#raudio");
-  const live = () => { if (video && R.videoWidth) $("#call").classList.add("live"); };
-  R.addEventListener("playing", live); R.addEventListener("resize", live);
-  $("#unmute").onclick = () => { A.play().catch(() => {}); R.play().catch(() => {}); $("#unmute").hidden = true; };
-  function mkpc() {
-    sdpSent = false;
-    const p = (pc = new RTCPeerConnection(ICE));
-    stream.getTracks().forEach((t) => p.addTrack(t, stream));
-    p.ontrack = (e) => {
-      const s = e.streams[0] || new MediaStream([e.track]);
-      if (A.srcObject !== s) { A.srcObject = s; R.srcObject = s; R.muted = true; }  // suara lewat <audio>, gambar lewat <video>
-      A.play().catch(() => { $("#unmute").hidden = false; });
-      R.play().catch(() => {});
+  // tampilkan foto profil kalau kamera mati / tidak ada gambar
+  const paint = (p) => { p.tile.ov.hidden = !(!video || p.tile.camOff || !p.tile.hasVid); };
+  function layout() {
+    const ids = peerIds();
+    $("#tiles").className = "tiles n" + Math.min(Math.max(ids.length, 1), 4);
+    $("#ctopn").textContent = ids.map((i) => nameOf(i)).join(", ");
+  }
+  function mkTile(pid) {
+    const el = mk("div", null, "tile"), v = mk("video"), a = mk("audio"), ov = mk("div", null, "tav"), stt = mk("small", "Menghubungkan...", "tstat");
+    v.autoplay = v.playsInline = true; v.muted = true; a.autoplay = true;
+    ov.append(av(nameOf(pid), imgOf(pid)));
+    el.append(v, a, ov, mk("b", nameOf(pid), "tname"), stt); $("#tiles").append(el);
+    return { el, v, a, ov, stt, camOff: false, hasVid: false };
+  }
+  function dropPeer(id) {
+    const p = peers[id]; if (!p) return;
+    clearTimeout(p.conT); p.pc.onconnectionstatechange = p.pc.onicecandidate = p.pc.ontrack = null; p.pc.close();
+    p.tile.el.remove(); delete peers[id]; layout();
+  }
+  function lost(id, msg) {
+    sigTo(id, "end"); dropPeer(id);
+    if (!peerIds().length) hang(false, msg); else toast(nameOf(id) + ": terputus");
+  }
+  function newPeer(pid) {
+    const pc = new RTCPeerConnection(ICE);
+    const p = (peers[pid] = { pc, pend: [], sdpSent: false, up: false, tile: mkTile(pid), conT: 0 });
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    pc.ontrack = (e) => {
+      const s = e.streams[0] || new MediaStream([e.track]), t = p.tile;
+      if (t.a.srcObject !== s) { t.a.srcObject = s; t.v.srcObject = s; }  // suara lewat <audio>, gambar lewat <video>
+      t.a.play().catch(() => { $("#unmute").hidden = false; }); t.v.play().catch(() => {});
     };
-    p.onicecandidate = (e) => e.candidate && sdpSent && sig("ice", e.candidate);
-    p.onconnectionstatechange = () => {
-      if (pc !== p) return;
-      if (p.connectionState === "connected") started();
-      else if (p.connectionState === "disconnected") $("#cstat").textContent = "Koneksi tidak stabil...";
-      else if (p.connectionState === "failed") hang(true, "Panggilan gagal tersambung. Jaringan kalian mungkin memblokir panggilan langsung (butuh server TURN).");
+    const seeVid = () => { if (p.tile.v.videoWidth) { p.tile.hasVid = true; paint(p); } };
+    p.tile.v.addEventListener("playing", seeVid); p.tile.v.addEventListener("resize", seeVid);
+    pc.onicecandidate = (e) => e.candidate && p.sdpSent && sigTo(pid, "ice", e.candidate);
+    pc.onconnectionstatechange = () => {
+      if (peers[pid] !== p) return;
+      const c = pc.connectionState;
+      if (c === "connected") {
+        p.up = true; clearTimeout(p.conT); p.tile.stt.hidden = true; started();
+        const vt = stream && stream.getVideoTracks()[0]; if (vt && !vt.enabled) sigTo(pid, "cam", { on: false });
+      } else if (c === "disconnected") { p.tile.stt.hidden = false; p.tile.stt.textContent = "Koneksi tidak stabil..."; }
+      else if (c === "failed") lost(pid, "Panggilan gagal tersambung. Jaringan kalian mungkin memblokir panggilan langsung (butuh server TURN).");
     };
-    conT = setTimeout(() => { if (pc === p && !t0) hang(true, "Tidak bisa tersambung. Coba lagi sebentar lagi."); }, 35000);
+    p.conT = setTimeout(() => { if (peers[pid] === p && !p.up) lost(pid, "Tidak bisa tersambung. Coba lagi sebentar lagi."); }, 35000);
+    paint(p); layout();
+    return p;
   }
   function hang(notify, msg) {
-    if (notify && peer) sig("end");
-    stopRing(); clearInterval(tmr); clearTimeout(conT); tmr = conT = null; t0 = 0;
-    if (pc) { pc.onconnectionstatechange = null; pc.close(); }
+    if (notify) peerIds().forEach((id) => sigTo(id, "end"));
+    stopRing(); clearInterval(tmr); tmr = null; t0 = 0;
+    peerIds().forEach(dropPeer); expected.clear(); incoming = null;
     if (stream) stream.getTracks().forEach((t) => t.stop());
-    pc = stream = peer = offer = null; pend = [];
-    A.srcObject = R.srcObject = $("#local").srcObject = null; $("#unmute").hidden = true;
-    $("#call").hidden = true; $("#incoming").hidden = true; $("#call").classList.remove("live", "on");
+    stream = null; $("#local").srcObject = null; $("#unmute").hidden = true; $("#lav").hidden = true; $("#tiles").replaceChildren();
+    $("#call").hidden = true; $("#incoming").hidden = true; $("#call").classList.remove("on", "vid");
     if (msg) toast(msg);
   }
-  async function call(v) {
-    if (peer || !st.cur || isRoom(st.cur)) return;
-    peer = st.cur; video = v; t0 = 0; $("#call").hidden = false; showPeer(peer, "Memanggil...");
-    try { await media(); } catch { return hang(false, "Izin kamera/mikrofon ditolak"); }
-    if (!peer) return hang(false);
-    mkpc();
-    const p = pc;
+  async function dial(to, group) {  // sambungan keluar ke satu orang
+    const p = newPeer(to); p.tile.stt.textContent = "Memanggil...";
+    const pc = p.pc;
     try {
-      await p.setLocalDescription(await p.createOffer()); await gathered(p);
-      if (pc !== p) return;
-      sdpSent = true; sig("offer", { sdp: { type: p.localDescription.type, sdp: p.localDescription.sdp }, video: v });
-    } catch { hang(false, "Tidak bisa memulai panggilan"); }
+      await pc.setLocalDescription(await pc.createOffer()); await gathered(pc);
+      if (peers[to] !== p) return;
+      p.sdpSent = true; sigTo(to, "offer", { sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }, video, group });
+    } catch { lost(to, "Tidak bisa memulai panggilan"); }
+  }
+  async function answer(from, data, pend) {  // jawab offer dari satu orang
+    const p = newPeer(from); p.pend = pend || []; p.tile.stt.textContent = "Menyambung...";
+    const pc = p.pc;
+    try {
+      await pc.setRemoteDescription(data.sdp);
+      p.pend.forEach((c) => pc.addIceCandidate(c).catch(() => {})); p.pend = [];
+      await pc.setLocalDescription(await pc.createAnswer()); await gathered(pc);
+      if (peers[from] !== p) return;
+      p.sdpSent = true; sigTo(from, "answer", { type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+    } catch { lost(from, "Tidak bisa menyambung panggilan"); }
+  }
+  async function call(v) {
+    if (inCall() || incoming || !st.cur || isRoom(st.cur) || st.cur === me.player_id) return;
+    const to = st.cur; video = v; t0 = 0; $("#call").hidden = false; showHead(to, "Memanggil...");
+    try { await media(); } catch { return hang(false, "Izin kamera/mikrofon ditolak"); }
+    if ($("#call").hidden) return hang(false);  // dibatalkan saat menunggu izin
+    dial(to, []);
   }
   $("#vbtn").onclick = () => call(true);
   $("#abtn").onclick = () => call(false);
+  async function addPeople() {
+    if (!stream || !t0) return toast("Tunggu panggilan tersambung dulu");
+    if (peerIds().some((id) => !peers[id].up)) return toast("Tunggu undangan sebelumnya dijawab dulu");
+    if (peerIds().length + 1 >= MAXP) return toast("Panggilan penuh (maksimal " + MAXP + " orang)");
+    const cur = new Set([...peerIds(), me.player_id, OFFICIAL]);
+    const x = await dialog({ title: "Tambah orang ke panggilan", desc: "Pilih satu teman. Maksimal " + MAXP + " orang dalam satu panggilan.", contacts: st.contacts.filter((c) => !cur.has(c.player_id)), contactsLabel: "Teman tersimpan", ok: "Undang" });
+    if (!x || !x.members.length) return;
+    if (!stream || peerIds().some((id) => !peers[id].up)) return;  // keadaan berubah saat memilih
+    if (x.members.length > 1) toast("Satu per satu ya, saya undang " + nameOf(x.members[0]));
+    const id = x.members[0], group = peerIds();
+    group.forEach((o) => sigTo(o, "join", { pid: id }));  // beri tahu peserta lain supaya offer dari orang baru diterima otomatis
+    dial(id, group);
+  }
+  $("#addbtn").onclick = addPeople;
   async function signal(from, { type, data }) {
-    if (type === "ice") { if (peer && from === peer) { (pc && pc.remoteDescription) ? pc.addIceCandidate(data).catch(() => {}) : pend.push(data); } return; }
+    const p = peers[from];
+    if (type === "ice") {
+      if (p) (p.pc.remoteDescription ? p.pc.addIceCandidate(data).catch(() => {}) : p.pend.push(data));
+      else if (incoming && incoming.from === from) incoming.pend.push(data);
+      return;
+    }
     if (type === "offer") {
-      if (peer) return send(from, "sig", JSON.stringify({ type: "reject" }));
-      peer = from; offer = data; video = !!data.video; t0 = 0; pend = [];
+      if (expected.has(from) && stream && !p) { expected.delete(from); return answer(from, data); }  // anggota panggilan: otomatis
+      if (incoming || inCall()) return sigTo(from, "reject");
+      incoming = { from, offer: data, pend: [] }; video = !!data.video; t0 = 0;
+      const n = ((data.group || []).length) + 2;
       $("#iav").replaceChildren(av(nameOf(from), imgOf(from))); $("#inwho").textContent = nameOf(from);
-      $("#inkind").textContent = video ? "Panggilan video masuk" : "Panggilan suara masuk";
+      $("#inkind").textContent = (n > 2 ? "Panggilan grup " : "Panggilan ") + (video ? "video" : "suara") + " masuk" + (n > 2 ? " (" + n + " orang)" : "");
       $("#incoming").hidden = false; startRing(); return;
     }
-    if (from !== peer) return;
+    if (type === "join") { if (p && data && data.pid) expected.add(data.pid); return; }
+    if (type === "cam") { if (p) { p.tile.camOff = !(data && data.on); paint(p); } return; }
     if (type === "answer") {
-      await pc.setRemoteDescription(data);
-      pend.forEach((c) => pc.addIceCandidate(c).catch(() => {})); pend = [];
-      if (!t0) $("#cstat").textContent = "Menyambung...";
-    } else hang(false, type === "reject" ? "Panggilan ditolak" : type === "end" ? (t0 ? "Panggilan berakhir" : "Panggilan dibatalkan") : null);
+      if (!p || p.pc.signalingState !== "have-local-offer") return;
+      await p.pc.setRemoteDescription(data);
+      p.pend.forEach((c) => p.pc.addIceCandidate(c).catch(() => {})); p.pend = [];
+      if (!p.up) p.tile.stt.textContent = "Menyambung...";
+      return;
+    }
+    if (type === "reject" || type === "end") {
+      if (p) {
+        const msg = type === "reject" ? "Panggilan ditolak" : t0 ? "Panggilan berakhir" : "Panggilan dibatalkan";
+        dropPeer(from);
+        if (!peerIds().length) hang(false, msg); else toast(nameOf(from) + (type === "reject" ? " menolak panggilan" : " keluar dari panggilan"));
+      } else if (incoming && incoming.from === from) {  // penelepon membatalkan saat masih berdering
+        incoming = null; stopRing(); $("#incoming").hidden = true; toast("Panggilan dibatalkan");
+      }
+    }
   }
   $("#accept").onclick = async () => {
-    stopRing(); $("#incoming").hidden = true; $("#call").hidden = false; showPeer(peer, "Menyambung...");
-    try { await media(); } catch { sig("reject"); return hang(false, "Izin kamera/mikrofon ditolak"); }
-    if (!peer) return hang(false);
-    mkpc();
-    const p = pc;
-    try {
-      await p.setRemoteDescription(offer.sdp);
-      pend.forEach((c) => pc.addIceCandidate(c).catch(() => {})); pend = [];
-      await p.setLocalDescription(await p.createAnswer()); await gathered(p);
-      if (pc !== p) return;
-      sdpSent = true; sig("answer", { type: p.localDescription.type, sdp: p.localDescription.sdp });
-    } catch { hang(true, "Tidak bisa menyambung panggilan"); }
+    const inc = incoming; if (!inc) return;
+    stopRing(); $("#incoming").hidden = true; $("#call").hidden = false; showHead(inc.from, "Menyambung...");
+    try { await media(); } catch { sigTo(inc.from, "reject"); incoming = null; return hang(false, "Izin kamera/mikrofon ditolak"); }
+    if (incoming !== inc) return hang(false);  // dibatalkan penelepon saat menunggu izin
+    incoming = null;
+    await answer(inc.from, inc.offer, inc.pend);
+    (inc.offer.group || []).forEach((id) => { if (id !== me.player_id && !peers[id]) dial(id, []); });  // sambungkan juga ke peserta lain
   };
-  $("#reject").onclick = () => { stopRing(); sig("reject"); hang(false); };
+  $("#reject").onclick = () => { const inc = incoming; incoming = null; stopRing(); $("#incoming").hidden = true; if (inc) sigTo(inc.from, "reject"); };
   $("#end").onclick = () => hang(true);
-  const toggle = (sel, kind) => ($(sel).onclick = (e) => {
-    const t = stream && stream.getTracks().find((x) => x.kind === kind);
-    if (!t) return;
+  $("#unmute").onclick = () => { Object.values(peers).forEach((p) => { p.tile.a.play().catch(() => {}); p.tile.v.play().catch(() => {}); }); $("#unmute").hidden = true; };
+  $("#mute").onclick = (e) => {
+    const t = stream && stream.getAudioTracks()[0]; if (!t) return;
     t.enabled = !t.enabled; e.currentTarget.classList.toggle("off", !t.enabled);
-  });
-  toggle("#mute", "audio");
-  toggle("#cam", "video");
+  };
+  $("#cam").onclick = (e) => {
+    const t = stream && stream.getVideoTracks()[0]; if (!t) return;
+    t.enabled = !t.enabled; e.currentTarget.classList.toggle("off", !t.enabled);
+    $("#lav").hidden = t.enabled;  // kamera mati: tampilkan fotomu sendiri
+    peerIds().forEach((id) => sigTo(id, "cam", { on: t.enabled }));  // lawan bicara menampilkan fotomu, bukan layar hitam
+  };
   $("#flip").onclick = async () => {
     try {
       facing = facing === "user" ? "environment" : "user";
       stream.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
       const nt = (await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } })).getVideoTracks()[0];
       stream.addTrack(nt);
-      pc.getSenders().find((s) => s.track && s.track.kind === "video").replaceTrack(nt);
-      $("#local").srcObject = stream;
+      Object.values(peers).forEach((p) => { const s = p.pc.getSenders().find((x) => x.track && x.track.kind === "video"); if (s) s.replaceTrack(nt); });
+      $("#local").srcObject = stream; $("#cam").classList.remove("off"); $("#lav").hidden = true;
     } catch { toast("Tidak bisa ganti kamera"); }
   };
-  const L = $("#local"); let dx = 0, dy = 0, drag = false;
+  const L = $("#local"), LA = $("#lav"); let dx = 0, dy = 0, drag = false;
   L.onpointerdown = (e) => { drag = true; dx = e.clientX - L.offsetLeft; dy = e.clientY - L.offsetTop; L.setPointerCapture(e.pointerId); };
-  L.onpointermove = (e) => { if (drag) { L.style.left = e.clientX - dx + "px"; L.style.top = e.clientY - dy + "px"; L.style.right = "auto"; } };
+  L.onpointermove = (e) => { if (drag) { L.style.left = LA.style.left = e.clientX - dx + "px"; L.style.top = LA.style.top = e.clientY - dy + "px"; L.style.right = LA.style.right = "auto"; } };
   L.onpointerup = () => (drag = false);
 
   try { localStorage.removeItem("nova_lock"); } catch {}  // sisa kunci aplikasi lama
@@ -1050,11 +1166,15 @@ async function initDashboard() {
   async function userActions(x) {
     const r = await dialog({ title: x.full_name, desc: "ID " + x.player_id + (x.banned ? " · sedang diblokir" : ""), ok: null, actions: [
       { key: "verify", label: x.verified ? "Cabut centang biru" : "Beri centang biru" },
-      ...(x.owner ? [] : [{ key: "block", label: x.banned ? "Buka blokir" : "Blokir akun" }, { key: "delete", label: "Hapus akun", danger: true }])] });
+      ...(x.owner ? [] : [{ key: "resetpw", label: "Reset password" }, { key: "block", label: x.banned ? "Buka blokir" : "Blokir akun" }, { key: "delete", label: "Hapus akun", danger: true }])] });
     if (!r) return;
     try {
       if (r.action === "verify") await api("/admin/users/" + x.player_id + "/verify", { method: "POST", body: JSON.stringify({ value: !x.verified }) });
-      else if (r.action === "block") {
+      else if (r.action === "resetpw") {
+        if (!(await dialog({ title: "Reset password " + x.full_name + "?", desc: "Dibuatkan password sementara. Berikan ke pemiliknya, lalu minta dia menggantinya di Profil.", ok: "Reset" }))) return;
+        const res = await api("/admin/users/" + x.player_id + "/resetpw", { method: "POST" });
+        await dialog({ title: "Password sementara", desc: x.full_name + ": " + res.password, ok: null }); return;
+      } else if (r.action === "block") {
         if (!x.banned && !(await dialog({ title: "Blokir " + x.full_name + "?", desc: "Dia langsung tidak bisa masuk atau memakai aplikasi sampai blokirnya dibuka.", ok: "Blokir" }))) return;
         await api("/admin/users/" + x.player_id + "/block", { method: "POST", body: JSON.stringify({ value: !x.banned }) });
       } else if (r.action === "delete") {
