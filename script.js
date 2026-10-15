@@ -60,7 +60,7 @@ async function initDashboard() {
   if (!getToken()) return logout();
   let me;
   try { me = (await api("/me")).user; } catch { return logout(); }
-  const st = { contacts: [], rooms: [], stories: [], calls: [], cur: null, unread: {}, last: {}, lastT: {}, seen: {}, filter: "all", tab: "home" };
+  const st = { contacts: [], rooms: [], stories: [], calls: [], cur: null, unread: {}, last: {}, lastT: {}, seen: {}, filter: "all", tab: "home", byId: {}, reply: null };
   const mk = (tag, txt, cls) => { const e = document.createElement(tag); if (txt != null) e.textContent = txt; if (cls) e.className = cls; return e; };
   const hue = (n) => [...n].reduce((a, c) => a + c.charCodeAt(0), 0) * 37 % 360;
   const av = (n, img) => { const e = mk("div", img ? "" : (n[0] || "?").toUpperCase(), "av"); e.style.background = img ? "url(" + img + ") center/cover" : "hsl(" + hue(n) + ",85%,78%)"; return e; };
@@ -71,7 +71,9 @@ async function initDashboard() {
   };
   const STK = /^\[stk:([0-9a-f]{24})\]$/;
   const stkId = (b) => { const m = STK.exec(b || ""); return m && m[1]; };
-  const lastText = (b) => (stkId(b) ? "Stiker" : b);
+  const RE = /^\[re:(\d+)\]([\s\S]*)$/;
+  const parseRe = (b) => { const m = RE.exec(b || ""); return m ? { id: +m[1], text: m[2] } : { id: 0, text: b || "" }; };
+  const lastText = (b) => (stkId(b) ? "Stiker" : parseRe(b).text);
   const sha24 = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].slice(0, 12).map((x) => x.toString(16).padStart(2, "0")).join("");
   /* Kotak dialog bergaya WapChatt, pengganti prompt() bawaan browser. Hasil: objek isian, atau null kalau dibatalkan. */
   function dialog({ title, desc, fields = [], contacts = null, ok = "Simpan", actions = [] }) {
@@ -291,13 +293,41 @@ async function initDashboard() {
     el.className = s && s.online ? "on" : "";
     el.textContent = s ? (s.online ? "online" : "terakhir dilihat " + fmt(s.seen)) : st.cur;
   }
+  const quote = (id) => {
+    const o = st.byId[id], q = mk("div", null, "quote");
+    q.append(mk("b", o ? (o.sender === me.player_id ? "Kamu" : nameOf(o.sender)) : "Pesan"), mk("span", o ? (stkId(o.body) ? "Stiker" : parseRe(o.body).text).slice(0, 80) : "Pesan tidak ditemukan"));
+    q.onclick = () => { const t = document.querySelector('#msgs .bub[data-mid="' + id + '"]'); if (t) { t.scrollIntoView({ behavior: "smooth", block: "center" }); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 1200); } };
+    return q;
+  };
+  function startReply(id) {
+    const o = st.byId[id]; if (!o) return;
+    st.reply = id;
+    $("#rpname").textContent = o.sender === me.player_id ? "Kamu" : nameOf(o.sender);
+    $("#rptext").textContent = (stkId(o.body) ? "Stiker" : parseRe(o.body).text).slice(0, 80);
+    $("#replybar").hidden = false; $("#text").focus();
+  }
+  const stopReply = () => { st.reply = null; $("#replybar").hidden = true; };
+  $("#rpx").onclick = stopReply;
   function addMsg(m) {
     const mine = m.sender === me.player_id, key = isRoom(m.to) || mine ? m.to : m.sender;
     st.last[key] = m.body; st.lastT[key] = m.t;
     const r = roomOf(st.cur || ""), sid = stkId(m.body), d = mk("div", null, "bub " + (mine ? "out" : "in") + (sid ? " sticker" : "")), box = mk("div"), mt = mk("div", null, "mt");
-    if (!mine && r && r.kind === "group") box.append(mk("small", nameOf(m.sender), "who"));
+    if (!mine && r && r.kind === "group") { const w = mk("small", nameOf(m.sender), "who"); w.style.cursor = "pointer"; w.onclick = () => showProfile(m.sender); box.append(w); }
+    const rp = parseRe(m.body);
+    if (m.id) st.byId[m.id] = m;
+    d.dataset.mid = m.id || "";
     if (sid) { const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
-    else box.append(mk("span", m.body));
+    else { if (rp.id) box.append(quote(rp.id)); box.append(mk("span", rp.text)); }
+    if (!$("#form").hidden) { const rb = mk("button", "\u21A9", "rpl"); rb.type = "button"; rb.title = rb.ariaLabel = "Balas"; rb.onclick = (e) => { e.stopPropagation(); const id = +d.dataset.mid; if (!id) return toast("Tunggu pesan terkirim dulu"); startReply(id); }; mt.append(rb); }
+    if (mine) {
+      const xb = mk("button", "hapus", "rpl"); xb.type = "button";
+      xb.onclick = async (e) => {
+        e.stopPropagation(); const id = +d.dataset.mid; if (!id) return toast("Tunggu pesan terkirim dulu");
+        if (!(await dialog({ title: "Hapus pesan?", desc: "Pesan dihapus untuk semua orang. Lawan bicara yang sedang membuka chat ini baru melihatnya hilang setelah membuka ulang.", ok: "Hapus" }))) return;
+        try { await api("/messages/" + id, { method: "DELETE" }); d.remove(); delete st.byId[id]; } catch (err) { toast(err.message); }
+      };
+      mt.append(xb);
+    }
     mt.append(mk("time", tm(m.t)));
     if (mine) { d.dataset.to = m.to; d.dataset.t = m.t; mt.append(tick(m)); }
     d.append(box, mt);
@@ -314,20 +344,21 @@ async function initDashboard() {
     roomSub(); $("#tray").hidden = true;
     $("#savebtn").hidden = !!r || saved(p) || p === OFFICIAL; $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL;
     $("#form").hidden = (!!r && r.kind === "channel" && r.owner !== me.player_id) || p === OFFICIAL;
-    $("#msgs").replaceChildren(); show("room");
+    st.byId = {}; stopReply(); $("#msgs").replaceChildren(); show("room");
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
     render();
   }
   $("#back").onclick = () => { st.cur = null; show(st.tab); };
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
-    const v = $("#text").value.trim();
-    if (!v || !st.cur) return;
-    $("#text").value = ""; upd();
+    const t0 = $("#text").value.trim();
+    if (!t0 || !st.cur) return;
+    const v = st.reply ? "[re:" + st.reply + "]" + t0 : t0;
+    $("#text").value = ""; upd(); stopReply();
     const to = st.cur, el = addMsg({ sender: me.player_id, to, kind: "text", body: v, t: new Date().toISOString(), pending: true });
     try {
       const m = await send(to, "text", v);
-      st.last[to] = m.body; st.lastT[to] = m.t; el.dataset.t = m.t;
+      st.last[to] = m.body; st.lastT[to] = m.t; el.dataset.t = m.t; el.dataset.mid = m.id; st.byId[m.id] = m;
       el.querySelector("time").textContent = tm(m.t); el.querySelector(".tk").replaceWith(tick(m)); render();
     } catch (err) { el.querySelector(".tk").replaceWith(ic("x", "tk fail")); toast("Pesan gagal terkirim: " + err.message); }
   };
@@ -356,7 +387,7 @@ async function initDashboard() {
       let m;
       try { m = await send(to, "text", body); }
       catch (e) { if (!/Stiker/.test(e.message)) throw e; await ensureSticker(src, true); m = await send(to, "text", body); }
-      st.last[to] = m.body; st.lastT[to] = m.t; el.dataset.t = m.t;
+      st.last[to] = m.body; st.lastT[to] = m.t; el.dataset.t = m.t; el.dataset.mid = m.id; st.byId[m.id] = m;
       el.querySelector("time").textContent = tm(m.t); el.querySelector(".tk").replaceWith(tick(m)); render();
     } catch (err) { el.querySelector(".tk").replaceWith(ic("x", "tk fail")); toast("Stiker gagal terkirim: " + err.message); }
   }
@@ -425,6 +456,7 @@ async function initDashboard() {
   }[st.tab] || (() => {}))();
   $("#fabt").onclick = () => storyText();
   $("#hnew").onclick = () => newChannel();
+  $("#newch-btn").onclick = () => newChannel();
   $("#hback").onclick = () => show(st.screen === "admin" ? "profile" : "upd");
   $("#explore-btn").onclick = () => show("explore");
   $("#xsearch").oninput = render;
@@ -660,12 +692,88 @@ async function initDashboard() {
       input.focus();
     });
   }
+  const seenSt = new Set();
+  function sheet(title, build) {
+    const back = mk("div", null, "dlg-back"), box = mk("div", null, "dlg sh");
+    box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true");
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const close = () => { document.removeEventListener("keydown", onKey, true); back.remove(); };
+    document.addEventListener("keydown", onKey, true);
+    if (title) box.append(mk("h2", title));
+    build(box, close);
+    const b = mk("button", "Tutup", "btn full ghost"); b.type = "button"; b.onclick = close; box.append(b);
+    back.onclick = (e) => { if (e.target === back) close(); };
+    back.append(box); document.body.append(back);
+  }
+  const irow = (k, v) => { const d = mk("div", null, "irow"); d.append(mk("small", k), mk("b", v)); return d; };
+  async function showViewers(s) {
+    let v; try { v = (await api("/stories/" + s.id + "/views")).views; } catch (e) { return toast(e.message); }
+    sheet("Dilihat oleh " + v.length + " orang", (box, close) => {
+      if (!v.length) box.append(mk("p", "Belum ada yang melihat status ini.", "dlg-d"));
+      const ul = mk("ul", null, "list");
+      v.forEach((x) => ul.append(row(x.avatar, x.full_name, fmt(x.t), () => { close(); showProfile(x.player_id); })));
+      box.append(ul);
+    });
+  }
+  async function showProfile(pid) {
+    let u; try { u = (await api("/users/" + encodeURIComponent(pid))).user; } catch (e) { return toast(e.message); }
+    const off = pid === OFFICIAL;
+    sheet("Detail profil", (box, close) => {
+      const cv = mk("div", null, "pcover"); if (u.cover) cv.style.backgroundImage = 'url("' + u.cover + '")';
+      const top = mk("div", null, "ptop"), nm = mk("b", u.full_name, "pname");
+      if (u.verified) nm.append(ic("seal"));
+      if (off) nm.append(mk("i", "RESMI", "own")); else if (u.owner) nm.append(mk("i", "OWNER", "own"));
+      top.append(av(u.full_name, off ? "logo.png" : u.avatar), nm);
+      box.append(cv, top, irow("ID", u.player_id));
+      if (!off) {
+        box.append(irow("Status", u.status || (u.private ? "Profil privat" : "-")), irow("Bergabung", dshort(u.joined)),
+          irow("Terakhir dilihat", u.online ? "online" : u.seen ? ago(u.seen) : "disembunyikan"));
+        if (!u.me && !u.saved) { const b = mk("button", "Simpan ID", "btn full ghost"); b.type = "button"; b.onclick = () => saveId(pid).then(close); box.append(b); }
+        if (!u.me && st.cur !== pid) { const b = mk("button", "Kirim pesan", "btn full"); b.type = "button"; b.onclick = () => { close(); open(pid); }; box.append(b); }
+        if (hasStory(pid)) { const b = mk("button", "Lihat status", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); viewStories(pid); }; box.append(b); }
+        if (me.is_owner) {
+          const b = mk("button", u.verified ? "Cabut centang biru" : "Beri centang biru", "btn full ghost"); b.type = "button";
+          b.onclick = async () => {
+            try { await api("/admin/users/" + pid + "/verify", { method: "POST", body: JSON.stringify({ value: !u.verified }) }); toast("Berhasil"); close(); loadContacts(); }
+            catch (e) { toast(e.message); }
+          };
+          box.append(b);
+        }
+      }
+      if (!u.me) box.append(clearBtn(pid, close));
+    });
+  }
+  async function clearChat(key) {
+    if (!(await dialog({ title: "Hapus chat?", desc: "Seluruh isi chat ini dihapus dari akunmu saja. Lawan bicara tetap menyimpannya, dan pesan baru akan muncul lagi.", ok: "Hapus chat" }))) return;
+    try { await api("/chats/clear", { method: "POST", body: JSON.stringify({ peer: key }) }); } catch (e) { return toast(e.message); }
+    delete st.last[key]; delete st.lastT[key];
+    if (st.cur === key) $("#msgs").replaceChildren();
+    render(); toast("Chat dihapus");
+  }
+  const clearBtn = (key, close) => { const b = mk("button", "Hapus chat", "btn full"); b.type = "button"; b.onclick = () => { close(); clearChat(key); }; return b; };
+  function showRoomInfo(r) {
+    sheet(r.name, (box, close) => {
+      box.append(mk("p", r.about || "Belum ada deskripsi.", "dlg-d"), irow("Jenis", r.kind === "group" ? "Grup" : "Saluran"), irow(r.kind === "group" ? "Anggota" : "Pengikut", String(r.count)));
+      const o = mk("button", "Pemilik: " + nameOf(r.owner), "btn full ghost"); o.type = "button"; o.onclick = () => showProfile(r.owner); box.append(o);
+      if (roomOf("R-" + r.id)) box.append(clearBtn("R-" + r.id, close));
+    });
+  }
+  const headTap = () => { if (!st.cur) return; const r = roomOf(st.cur); r ? showRoomInfo(r) : showProfile(st.cur); };
+  $("#rav").onclick = headTap; $(".rhead .rt").onclick = headTap;
   function viewStories(p) {
     const list = st.stories.filter((s) => s.owner === p);
     if (!list.length) return;
     let i = 0;
     const draw = () => {
       const s = list[i], b = $("#svbody"); b.replaceChildren();
+      const mineS = s.owner === me.player_id;
+      if (!mineS && !seenSt.has(s.id)) { seenSt.add(s.id); api("/stories/" + s.id + "/view", { method: "POST" }).catch(() => {}); }
+      $("#svviews").hidden = !mineS;
+      if (mineS) {
+        $("#svvn").textContent = "...";
+        api("/stories/" + s.id + "/views").then((r) => { if (list[i] === s) $("#svvn").textContent = r.views.length; }).catch(() => {});
+        $("#svviews").onclick = () => showViewers(s);
+      }
       if (s.kind === "img") { const im = mk("img"); im.src = s.body; b.append(im); b.style.background = "#000"; }
       else { b.append(mk("p", s.body)); b.style.background = "hsl(" + hue(s.body) + ",85%,78%)"; }
       $("#svwho").textContent = nameOf(p) + " · " + fmt(s.t) + " (" + (i + 1) + "/" + list.length + ")";

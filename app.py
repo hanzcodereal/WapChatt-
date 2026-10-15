@@ -8,13 +8,14 @@ from flask import Flask, request, jsonify, send_from_directory, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
-from database import Session, User, Contact, Message, Profile, ProfileExt, Sticker, AppSetting, UserFlag, Story, Room, RoomMember, Call, init_db
+from database import Session, User, Contact, Message, Profile, ProfileExt, Sticker, AppSetting, UserFlag, Story, StoryView, ChatClear, Room, RoomMember, Call, init_db
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 ser = URLSafeTimedSerializer(os.getenv("SECRET_KEY", "dev-secret-change-me"))
 init_db()
 
+GMAIL_RE = re.compile(r"^[a-z0-9.]+@gmail\.com$")  # pendaftaran hanya untuk email Gmail
 STK_RE = re.compile(r"^\[stk:([0-9a-f]{24})\]$")
 STK_DATA = re.compile(r"^data:image/(png|webp);base64,[A-Za-z0-9+/=]+$")
 OFFICIAL = "NOVA"  # akun resmi pengirim pengumuman (tidak bisa login)
@@ -34,7 +35,7 @@ def new_pid(db):
 
 ID_COLS = [(User, "player_id"), (Contact, "owner"), (Contact, "contact_pid"), (Message, "sender"), (Message, "to_id"),
            (Profile, "player_id"), (ProfileExt, "player_id"), (Story, "owner"), (Room, "owner"),
-           (RoomMember, "player_id"), (Call, "caller"), (Call, "callee")]
+           (RoomMember, "player_id"), (Call, "caller"), (Call, "callee"), (StoryView, "viewer"), (ChatClear, "owner"), (ChatClear, "peer")]
 
 
 def migrate_ids():
@@ -186,8 +187,10 @@ def log_call(db, me_id, to, body):
 def register():
     d = request.get_json(silent=True) or {}
     name, email, pw = (d.get("full_name") or "").strip(), (d.get("email") or "").strip().lower(), d.get("password") or ""
-    if not name or "@" not in email or len(pw) < 6:
+    if not name or len(pw) < 6:
         return jsonify(error="Data tidak valid. Password minimal 6 karakter."), 400
+    if not GMAIL_RE.match(email):
+        return jsonify(error="Daftar wajib memakai email Gmail (contoh: nama@gmail.com)."), 400
     hashed = bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
     with Session() as db:
         if db.query(User.id).filter_by(email=email).first():
@@ -292,11 +295,15 @@ def sticker_up(db, u):
 
 def purge_room(db, rid):
     db.query(Message).filter(Message.to_id == "R-%d" % rid).delete(synchronize_session=False)
+    db.query(ChatClear).filter(ChatClear.peer == "R-%d" % rid).delete(synchronize_session=False)
     db.query(RoomMember).filter(RoomMember.room_id == rid).delete(synchronize_session=False)
     db.query(Room).filter(Room.id == rid).delete(synchronize_session=False)
 
 
 def purge_user(db, pid):
+    sids = [i for (i,) in db.query(Story.id).filter_by(owner=pid)]
+    if sids:
+        db.query(StoryView).filter(StoryView.story_id.in_(sids)).delete(synchronize_session=False)
     for r in db.query(Room).filter_by(owner=pid).all():
         purge_room(db, r.id)
     for M, col in ID_COLS:
@@ -464,8 +471,39 @@ def history(db, u):
     else:
         cond = or_((Message.sender == me_id) & (Message.to_id == p),
                    (Message.sender == p) & (Message.to_id == me_id))
-    rows = db.query(Message).filter(Message.kind == "text", cond).order_by(Message.id.desc()).limit(200).all()
+    cl = db.query(ChatClear).filter_by(owner=me_id, peer=p).first()
+    q = db.query(Message).filter(Message.kind == "text", cond)
+    if cl:
+        q = q.filter(Message.id > cl.upto)
+    rows = q.order_by(Message.id.desc()).limit(200).all()
     return jsonify(messages=[m.public() for m in reversed(rows)])
+
+
+@app.delete("/api/messages/<int:mid>")
+@authed
+def msg_delete(db, u, mid):
+    m = db.get(Message, mid)
+    if not m or m.kind != "text" or m.sender != u.player_id:
+        return jsonify(error="Pesan tidak bisa dihapus."), 404
+    db.delete(m)
+    db.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/chats/clear")
+@authed
+def chat_clear(db, u):
+    peer = ((request.get_json(silent=True) or {}).get("peer") or "")[:12]
+    if not peer:
+        return jsonify(error="Chat tidak valid."), 400
+    upto = db.query(func.max(Message.id)).scalar() or 0
+    cl = db.query(ChatClear).filter_by(owner=u.player_id, peer=peer).first()
+    if cl:
+        cl.upto = upto
+    else:
+        db.add(ChatClear(owner=u.player_id, peer=peer, upto=upto))
+    db.commit()
+    return jsonify(ok=True)
 
 
 @app.get("/api/poll")
@@ -568,12 +606,15 @@ def chats(db, u):
     rows = (db.query(Message).filter(Message.kind == "text", or_(
             Message.sender == me_id, Message.to_id == me_id, Message.to_id.in_(tags)))
             .order_by(Message.id.desc()).limit(400).all())
+    clears = {c.peer: c.upto for c in db.query(ChatClear).filter_by(owner=me_id)}
     seen, out = set(), []
     for m in rows:
         key = m.to_id if (m.to_id.startswith("R-") or m.sender == me_id) else m.sender
         if key in seen:
             continue
         seen.add(key)
+        if m.id <= clears.get(key, 0):
+            continue
         out.append({"key": key, "body": m.body[:120], "t": m.created_at.isoformat() + "Z", "mine": m.sender == me_id})
     return jsonify(chats=out)
 
@@ -599,6 +640,50 @@ def stories_post(db, u):
     db.add(Story(owner=u.player_id, kind=kind, body=body))
     db.commit()
     return jsonify(ok=True), 201
+
+
+@app.post("/api/stories/<int:sid>/view")
+@authed
+def story_view(db, u, sid):
+    s = db.get(Story, sid)
+    ok = s and s.owner != u.player_id and s.created_at > datetime.utcnow() - timedelta(hours=24) \
+        and db.query(Contact.id).filter_by(owner=u.player_id, contact_pid=s.owner).first()
+    if ok and not db.query(StoryView.id).filter_by(story_id=sid, viewer=u.player_id).first():
+        db.add(StoryView(story_id=sid, viewer=u.player_id))
+        db.commit()
+    return jsonify(ok=True)
+
+
+@app.get("/api/stories/<int:sid>/views")
+@authed
+def story_views(db, u, sid):
+    s = db.get(Story, sid)
+    if not s or s.owner != u.player_id:
+        return jsonify(error="Status tidak ditemukan."), 404
+    rows = db.query(StoryView).filter_by(story_id=sid).order_by(StoryView.id.desc()).all()
+    users = {x.player_id: x for x in db.query(User).filter(User.player_id.in_([r.viewer for r in rows]))} if rows else {}
+    pr = prof(db, list(users))
+    return jsonify(views=[{"player_id": r.viewer, "full_name": users[r.viewer].full_name,
+                           "avatar": pub(users[r.viewer], pr)["avatar"], "t": iso(r.created_at)}
+                          for r in rows if r.viewer in users])
+
+
+@app.get("/api/users/<pid>")
+@authed
+def user_detail(db, u, pid):
+    t = db.query(User).filter_by(player_id=pid).first()
+    if not t:
+        return jsonify(error="Pengguna tidak ditemukan."), 404
+    pr = prof(db, [pid])
+    d, o, me_ = pr[pid], pub(t, pr), t.id == u.id
+    seen = d["last_seen"] if (d["show_seen"] or me_) else None
+    return jsonify(user={
+        "player_id": t.player_id, "full_name": t.full_name, "avatar": o["avatar"], "status": o["status"],
+        "cover": d["cover"] if (d["public"] or me_) else "", "verified": is_verified(t), "owner": is_owner(t),
+        "joined": iso(t.created_at), "seen": iso(seen),
+        "online": bool(seen and (datetime.utcnow() - seen).total_seconds() < ONLINE_SEC),
+        "saved": bool(db.query(Contact.id).filter_by(owner=u.player_id, contact_pid=pid).first()),
+        "private": not d["public"], "me": me_})
 
 
 @app.get("/api/rooms")

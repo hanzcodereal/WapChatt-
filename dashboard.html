@@ -65,7 +65,7 @@
   <section id="upd" hidden>
     <h2 class="sec">Status</h2>
     <div id="sgrid" class="sgrid"></div>
-    <div class="sech"><h2 class="sec">Saluran</h2><button id="explore-btn" class="pill">Jelajahi</button></div>
+    <div class="sech"><h2 class="sec">Saluran</h2><div class="pills"><button id="newch-btn" class="pill">Buat saluran</button><button id="explore-btn" class="pill">Jelajahi</button></div></div>
     <ul id="mych" class="list"></ul>
     <p id="find-h" class="hint l">Temukan saluran untuk diikuti</p>
     <ul id="finds" class="list"></ul>
@@ -124,6 +124,7 @@
   </div>
   <div id="msgs" class="msgs"></div>
   <div id="tray" class="tray" hidden></div>
+  <div id="replybar" class="replybar" hidden><div><b id="rpname"></b><span id="rptext"></span></div><button id="rpx" type="button" aria-label="Batal membalas">&times;</button></div>
   <form id="form" class="composer">
     <button type="button" id="plus" class="cb" aria-label="Emoji" title="Emoji"><svg class="ic"><use href="#i-plus"/></svg></button>
     <input id="text" placeholder="Ketik pesan..." autocomplete="off" aria-label="Pesan">
@@ -140,7 +141,7 @@
   <button data-s="profile"><svg class="ic"><use href="#i-user"/></svg><span>Profil</span></button>
 </nav>
 <input id="pick" type="file" accept="image/*" hidden>
-<div id="sv" class="sv" hidden><div class="svbar"><span id="svwho"></span><button id="svclose"><svg class="ic"><use href="#i-x"/></svg>Tutup</button></div><div id="svbody"></div></div>
+<div id="sv" class="sv" hidden><div class="svbar"><span id="svwho"></span><button id="svclose"><svg class="ic"><use href="#i-x"/></svg>Tutup</button></div><div id="svbody"></div><button id="svviews" class="svviews" hidden>Dilihat oleh <span id="svvn">0</span> orang</button></div>
 <div id="incoming" class="incoming" hidden>
   <div id="iav" class="cav"></div>
   <h2 id="inwho"></h2>

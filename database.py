@@ -54,6 +54,22 @@ class Message(Base):  # kind: 'text' = pesan, 'sig' = signaling panggilan WebRTC
                 "body": self.body, "t": self.created_at.isoformat() + "Z"}
 
 
+class StoryView(Base):  # siapa saja yang sudah melihat sebuah status
+    __tablename__ = "story_views"
+    id = Column(Integer, primary_key=True)
+    story_id = Column(Integer, nullable=False, index=True)
+    viewer = Column(String(12), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ChatClear(Base):  # "hapus chat" untuk diri sendiri: pesan dengan id <= upto disembunyikan dari pemilik
+    __tablename__ = "chat_clears"
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)
+    peer = Column(String(12), nullable=False)  # ID teman atau R-<id> untuk grup/saluran
+    upto = Column(Integer, nullable=False, default=0)
+
+
 def init_db():
     Base.metadata.create_all(engine)
 

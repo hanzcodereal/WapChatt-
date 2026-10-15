@@ -24,7 +24,7 @@
 
     <form id="register-form" hidden>
       <label>Nama Lengkap<input name="full_name" required maxlength="100"></label>
-      <label>Email<input type="email" name="email" required autocomplete="email"></label>
+      <label>Email (wajib @gmail.com)<input type="email" name="email" required autocomplete="email" placeholder="nama@gmail.com" pattern="[A-Za-z0-9.]+@[Gg][Mm][Aa][Ii][Ll]\.[Cc][Oo][Mm]" title="Gunakan email Gmail, contoh: nama@gmail.com"></label>
       <label>Password (min. 6 karakter)<input type="password" name="password" minlength="6" required autocomplete="new-password"></label>
       <button class="btn" type="submit">Buat akun</button>
     </form>
