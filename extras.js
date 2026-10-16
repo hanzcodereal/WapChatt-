@@ -62,6 +62,7 @@ window.WCX = function (c) {
   function renderQna(w, q) {
     const body = w.querySelector(".pbody"), mine = q.answers.find((a) => a.mine);
     body.replaceChildren(mk("small", q.count + " jawaban"));
+    if (mine && (mine.replies || []).some((r) => r.who === "admin")) body.append(mk("small", "Admin membalas jawabanmu"));
     const row = mk("div", null, "qbtns"), ans = mk("button", mine ? "Ubah jawabanku" : "Jawab", "btn"), see = mk("button", "Lihat jawaban (" + q.count + ")", "btn ghost");
     ans.type = see.type = "button";
     ans.onclick = async () => {
@@ -74,17 +75,40 @@ window.WCX = function (c) {
     row.append(see); body.append(row);
   }
   function showAnswers(w, q) {
-    c.sheet("Jawaban (" + q.count + ")", (box) => {
+    c.sheet("Jawaban (" + q.count + ")", (box, close) => {
       if (!q.answers.length) box.append(mk("p", "Belum ada jawaban.", "dlg-d"));
+      const reopen = (nq) => { close(); renderQna(w, nq); showAnswers(w, nq); };
       const ul = mk("ul", null, "list");
       q.answers.forEach((a) => {
         const li = q.is_owner ? c.row(null, a.name, "ID " + a.by + " · " + a.text, () => {}, { time: c.short(a.t) })
           : c.row(null, a.mine ? "Anonim (jawabanmu)" : "Anonim", a.text, () => {}, { time: c.short(a.t) });
-        if (a.mine || q.is_owner) {
-          const x = mk("button", "Hapus", "pinx"); x.type = "button";
-          x.onclick = async (ev) => { ev.stopPropagation(); try { await api("/answers/" + a.id, { method: "DELETE" }); li.remove(); loadQna(w); } catch (e) { toast(e.message); } };
-          li.append(x);
+        li.style.flexWrap = "wrap";
+        (a.replies || []).forEach((r) => {
+          const rp = mk("div", null, "qrep"); rp.append(mk("b", r.who === "admin" ? "Admin saluran" : "Penjawab"), mk("span", r.text));
+          if (r.mine || q.is_owner) {
+            const x = mk("button", "hapus", "plink"); x.type = "button";
+            x.onclick = async (ev) => { ev.stopPropagation(); try { await api("/replies/" + r.id, { method: "DELETE" }); reopen((await api("/questions/" + q.id)).q); } catch (err) { toast(err.message); } };
+            rp.append(x);
+          }
+          li.append(rp);
+        });
+        const acts = mk("div", null, "qact");
+        if (q.is_owner || a.mine) {  // admin membalas penjawab, penjawab membalas admin
+          const rb = mk("button", "Balas", "plink"); rb.type = "button";
+          rb.onclick = async (ev) => {
+            ev.stopPropagation();
+            const x = await dialog({ title: q.is_owner ? "Balas jawaban" : "Balas admin", fields: [{ name: "t", label: "Balasanmu", multiline: true, max: 300, required: true }], ok: "Kirim" });
+            if (!x) return;
+            try { reopen((await api("/answers/" + a.id + "/reply", { method: "POST", body: JSON.stringify({ text: x.t }) })).q); } catch (err) { toast(err.message); }
+          };
+          acts.append(rb);
         }
+        if (a.mine || q.is_owner) {
+          const x = mk("button", "Hapus jawaban", "plink"); x.type = "button";
+          x.onclick = async (ev) => { ev.stopPropagation(); try { await api("/answers/" + a.id, { method: "DELETE" }); reopen((await api("/questions/" + q.id)).q); } catch (err) { toast(err.message); } };
+          acts.append(x);
+        }
+        if (acts.children.length) li.append(acts);
         ul.append(li);
       });
       box.append(ul);

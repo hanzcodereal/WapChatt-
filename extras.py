@@ -3,6 +3,7 @@
 - Sematkan pesan       : tabel pinned_msgs (24 jam / 7 hari / 30 hari / tanpa batas)
 - Polling              : tabel polls, poll_options, poll_votes (grup, chat pribadi, saluran; di saluran suara anonim)
 - Pertanyaan saluran   : tabel questions, q_answers (admin tidak bisa menjawab; hanya admin yang melihat nama + ID penjawab, pengikut lain tidak)
+- Balas jawaban        : tabel q_replies (admin membalas penjawab, penjawab membalas admin; hanya label peran yang tampil)
 - Teruskan pesan       : POST /api/forward
 - Link grup            : tabel room_invites (kode undangan acak per grup; link saluran dan profil tidak butuh tabel)
 - Bintangi pesan       : tabel star_msgs (pribadi, hanya terlihat pemilik)
@@ -84,6 +85,15 @@ class QAnswer(Base):
     q_id = Column(Integer, nullable=False, index=True)
     author = Column(String(12), nullable=False, index=True)   # hanya dipakai server (ganti/hapus jawaban sendiri), TIDAK PERNAH dikirim ke klien
     text = Column(String(500), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class QReply(Base):
+    __tablename__ = "q_replies"
+    id = Column(Integer, primary_key=True)
+    answer_id = Column(Integer, nullable=False, index=True)
+    author = Column(String(12), nullable=False, index=True)   # admin saluran atau penjawab aslinya
+    text = Column(String(300), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -180,6 +190,9 @@ def drop_polls(db, cond):
 def drop_questions(db, cond):
     ids = [i for (i,) in db.query(Question.id).filter(cond)]
     if ids:
+        aids = [i for (i,) in db.query(QAnswer.id).filter(QAnswer.q_id.in_(ids))]
+        if aids:
+            db.query(QReply).filter(QReply.answer_id.in_(aids)).delete(synchronize_session=False)
         db.query(QAnswer).filter(QAnswer.q_id.in_(ids)).delete(synchronize_session=False)
         db.query(Question).filter(Question.id.in_(ids)).delete(synchronize_session=False)
 
@@ -207,6 +220,7 @@ def on_user_purge(db, pid):
     drop_polls(db, or_(Poll.owner == pid, Poll.chat == pid))
     drop_questions(db, or_(Question.owner == pid, Question.chat == pid))
     db.query(PollVote).filter(PollVote.voter == pid).delete(synchronize_session=False)
+    db.query(QReply).filter(QReply.author == pid).delete(synchronize_session=False)
     db.query(QAnswer).filter(QAnswer.author == pid).delete(synchronize_session=False)
     db.query(StarMsg).filter(StarMsg.owner == pid).delete(synchronize_session=False)
     db.query(PinnedMsg).filter(PinnedMsg.by == pid).delete(synchronize_session=False)
@@ -297,9 +311,14 @@ def register(app, authed, owner_only, Session, official="NOVA"):
         # nama + ID penjawab HANYA dikirim ke admin (pemilik) saluran; pengikut lain tidak pernah menerimanya
         is_owner = q.owner == me
         who = {x.player_id: x.full_name for x in db.query(User).filter(User.player_id.in_([a.author for a in rows]))} if is_owner and rows else {}
+        reps = {}
+        for r in db.query(QReply).filter(QReply.answer_id.in_([a.id for a in rows])).order_by(QReply.id) if rows else []:
+            # balasan hanya diberi label peran; ID penulisnya tidak dikirim
+            reps.setdefault(r.answer_id, []).append({"id": r.id, "text": r.text, "t": iso(r.created_at),
+                                                     "who": "admin" if r.author == q.owner else "penjawab", "mine": r.author == me})
         out = []
         for a in rows:
-            o = {"id": a.id, "text": a.text, "t": iso(a.created_at), "mine": a.author == me}
+            o = {"id": a.id, "text": a.text, "t": iso(a.created_at), "mine": a.author == me, "replies": reps.get(a.id, [])}
             if is_owner:
                 o["by"], o["name"] = a.author, who.get(a.author, a.author)
             out.append(o)
@@ -354,7 +373,38 @@ def register(app, authed, owner_only, Session, official="NOVA"):
         q = db.get(Question, a.q_id) if a else None
         if not a or not q or (a.author != u.player_id and q.owner != u.player_id):
             return jsonify(error="Jawaban tidak ditemukan."), 404
+        db.query(QReply).filter(QReply.answer_id == aid).delete(synchronize_session=False)
         db.delete(a)
+        db.commit()
+        return jsonify(ok=True)
+
+    @app.post("/api/answers/<int:aid>/reply")
+    @authed
+    def q_reply(db, u, aid):
+        a = db.get(QAnswer, aid)
+        q = q_for(db, u.player_id, a.q_id) if a else None
+        text = str((request.get_json(silent=True) or {}).get("text") or "").strip()[:300]
+        if not a or not q:
+            return jsonify(error="Jawaban tidak ditemukan."), 404
+        if u.player_id != q.owner and u.player_id != a.author:  # admin boleh membalas semua; selain itu hanya penjawabnya sendiri
+            return jsonify(error="Hanya admin saluran dan penjawab yang bisa membalas."), 403
+        if not text:
+            return jsonify(error="Balasan tidak boleh kosong."), 400
+        if (db.query(func.count(QReply.id)).filter_by(answer_id=aid).scalar() or 0) >= 50:
+            return jsonify(error="Balasan untuk jawaban ini sudah terlalu banyak."), 400
+        db.add(QReply(answer_id=aid, author=u.player_id, text=text))
+        db.commit()
+        return jsonify(q=q_dict(db, u.player_id, q))
+
+    @app.delete("/api/replies/<int:rid>")
+    @authed
+    def q_reply_del(db, u, rid):
+        r = db.get(QReply, rid)
+        a = db.get(QAnswer, r.answer_id) if r else None
+        q = db.get(Question, a.q_id) if a else None
+        if not r or not q or (r.author != u.player_id and q.owner != u.player_id):
+            return jsonify(error="Balasan tidak ditemukan."), 404
+        db.delete(r)
         db.commit()
         return jsonify(ok=True)
 

@@ -338,7 +338,16 @@ async function initDashboard() {
     try { (await api("/rooms/" + r.id + "/members")).members.forEach((x) => (st.mem[x.player_id] = { full_name: x.full_name, avatar: x.avatar })); paintMem(); } catch {}
     st.memBusy = false;
   }
+  const dayKey = (t) => { const d = new Date(t); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); };
+  const dayLabel = (t) => {  // Hari ini / Kemarin / tanggal lengkap
+    const n = new Date(), y = new Date(); y.setDate(n.getDate() - 1); const k = dayKey(t);
+    return k === dayKey(n) ? "Hari ini" : k === dayKey(y) ? "Kemarin" : new Date(t).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+  };
   function addMsg(m) {
+    if (m.t && dayKey(m.t) !== st.day) {
+      st.day = dayKey(m.t);
+      const s = mk("div", dayLabel(m.t), "dsep"); s.setAttribute("role", "separator"); $("#msgs").append(s);
+    }
     const mine = m.sender === me.player_id, key = isRoom(m.to) || mine ? m.to : m.sender;
     st.last[key] = m.body; st.lastT[key] = m.t;
     const r = roomOf(st.cur || ""), sid = stkId(m.body), d = mk("div", null, "bub " + (mine ? "out" : "in") + (sid ? " sticker" : "")), box = mk("div"), mt = mk("div", null, "mt");
@@ -382,7 +391,7 @@ async function initDashboard() {
     roomSub(); $("#tray").hidden = true;
     $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL || p === me.player_id;
     $("#form").hidden = (!!r && r.kind === "channel" && r.owner !== me.player_id) || p === OFFICIAL;
-    st.byId = {}; stopReply(); $("#msgs").replaceChildren(); show("room");
+    st.byId = {}; st.day = ""; stopReply(); $("#msgs").replaceChildren(); show("room");
     const memP = r && r.kind === "group" ? loadMem(r) : null;
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
     if (memP) await memP;
@@ -562,32 +571,38 @@ async function initDashboard() {
       const wrap = mk("div", null, "sc-wrap"), cv = mk("canvas", null, "mk-cv"); cv.tabIndex = 0; cv.setAttribute("aria-label", "Pratinjau stiker. Geser untuk memosisikan foto."); wrap.append(cv);
       const ctl = mk("div", null, "mk-ctl");
       const zl = mk("label"), zr = mk("input"); zr.type = "range"; zr.min = 1; zr.max = 4; zr.step = 0.05; zr.value = 1; zl.append(mk("span", "Zoom (atau cubit layar)"), zr);
-      const row = mk("div", null, "sc-tabs"), bsq = mk("button", "Kotak", "pill on"), bci = mk("button", "Bulat", "pill"), bbo = mk("button", "Garis putih", "pill on");
-      [bsq, bci, bbo].forEach((b) => (b.type = "button")); bbo.setAttribute("aria-pressed", "true"); row.append(bsq, bci, bbo);
+      const row = mk("div", null, "sc-tabs"), bsq = mk("button", "Kotak", "pill on"), bro = mk("button", "Tumpul", "pill"), bci = mk("button", "Bulat", "pill"), bfu = mk("button", "Utuh", "pill"), bbo = mk("button", "Garis putih", "pill on");
+      [bsq, bro, bci, bfu, bbo].forEach((b) => (b.type = "button")); bbo.setAttribute("aria-pressed", "true"); row.append(bsq, bro, bci, bfu, bbo);
       const tl = mk("label"), tin = mk("input"), bl = mk("label"), bin = mk("input");
       tin.maxLength = bin.maxLength = 24; tin.autocomplete = bin.autocomplete = "off"; tin.placeholder = bin.placeholder = "Opsional";
       tl.append(mk("span", "Teks atas"), tin); bl.append(mk("span", "Teks bawah"), bin);
       ctl.append(zl, row, tl, bl); box.append(bar, wrap, ctl); back.append(box); document.body.append(back);
 
       const rr = (g, x, y, w, h, r) => { g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
-      const shp = (g, z, inset) => { g.beginPath(); if (shape === "circle") g.arc(z / 2, z / 2, z / 2 - inset, 0, Math.PI * 2); else rr(g, inset, inset, z - 2 * inset, z - 2 * inset, z * 0.14); };
+      const dims = (z) => { if (shape !== "full") return [z, z]; const r = im.naturalWidth / im.naturalHeight; return r >= 1 ? [z, Math.max(40, Math.round(z / r))] : [Math.max(40, Math.round(z * r)), z]; };
+      const shp = (g, W, H, inset) => {
+        g.beginPath();
+        if (shape === "circle") g.arc(W / 2, H / 2, Math.min(W, H) / 2 - inset, 0, Math.PI * 2);
+        else if (shape === "rounded") rr(g, inset, inset, W - 2 * inset, H - 2 * inset, Math.min(W, H) * 0.14);
+        else g.rect(inset, inset, W - 2 * inset, H - 2 * inset);
+      };
       const limit = () => {
-        const inner = 256 - 2 * (border ? 12 : 3), k = Math.max(inner / im.naturalWidth, inner / im.naturalHeight) * zoom;
-        const mx = Math.max(0, (im.naturalWidth * k - inner) / 2), my = Math.max(0, (im.naturalHeight * k - inner) / 2);
+        const [W, H] = dims(256), ins = border ? 12 : 3, iw = W - 2 * ins, ih = H - 2 * ins, k = Math.max(iw / im.naturalWidth, ih / im.naturalHeight) * zoom;
+        const mx = Math.max(0, (im.naturalWidth * k - iw) / 2), my = Math.max(0, (im.naturalHeight * k - ih) / 2);
         ox = clamp(ox, -mx, mx); oy = clamp(oy, -my, my);
       };
       const draw = (c, z) => {
-        const k = z / 256, g = c.getContext("2d"); c.width = c.height = z; g.clearRect(0, 0, z, z);
-        const ins = (border ? 12 : 3) * k, inner = z - 2 * ins;
-        if (border) { shp(g, z, 3 * k); g.fillStyle = "#fff"; g.fill(); }
-        g.save(); shp(g, z, ins); g.clip();
-        const sc = Math.max(inner / im.naturalWidth, inner / im.naturalHeight) * zoom, w = im.naturalWidth * sc, h = im.naturalHeight * sc;
-        g.drawImage(im, z / 2 - w / 2 + ox * k, z / 2 - h / 2 + oy * k, w, h); g.restore();
+        const k = z / 256, g = c.getContext("2d"), [W, H] = dims(z); c.width = W; c.height = H; g.clearRect(0, 0, W, H);
+        const ins = (border ? 12 : 3) * k, inner = W - 2 * ins, innerH = H - 2 * ins;
+        if (border) { shp(g, W, H, 3 * k); g.fillStyle = "#fff"; g.fill(); }
+        g.save(); shp(g, W, H, ins); g.clip();
+        const sc = Math.max(inner / im.naturalWidth, innerH / im.naturalHeight) * zoom, w = im.naturalWidth * sc, h = im.naturalHeight * sc;
+        g.drawImage(im, W / 2 - w / 2 + ox * k, H / 2 - h / 2 + oy * k, w, h); g.restore();
         const txt = (t, top) => {
           if (!t) return; t = t.toUpperCase(); let f = 38 * k; const F = () => (g.font = "900 " + f + 'px Impact,"Arial Black",Arial,sans-serif'); F();
           while (g.measureText(t).width > inner * 0.9 && f > 10) { f -= 2; F(); }
           g.textAlign = "center"; g.textBaseline = top ? "top" : "bottom"; g.lineJoin = "round"; g.lineWidth = Math.max(3, f / 5); g.strokeStyle = "#111"; g.fillStyle = "#fff";
-          const y = top ? ins + 8 * k : z - ins - 8 * k; g.strokeText(t, z / 2, y); g.fillText(t, z / 2, y);
+          const y = top ? ins + 8 * k : H - ins - 8 * k; g.strokeText(t, W / 2, y); g.fillText(t, W / 2, y);
         };
         txt(tin.value.trim(), true); txt(bin.value.trim(), false);
       };
@@ -601,7 +616,7 @@ async function initDashboard() {
       const ptr = new Map(), dist = () => { if (ptr.size < 2) return 0; const [a, b] = [...ptr.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]); }; let pd = 0;
       cv.onpointerdown = (e) => { cv.setPointerCapture(e.pointerId); ptr.set(e.pointerId, [e.clientX, e.clientY]); pd = dist(); };
       cv.onpointermove = (e) => {
-        if (!ptr.has(e.pointerId)) return; const old = ptr.get(e.pointerId), f = 256 / cv.getBoundingClientRect().width; ptr.set(e.pointerId, [e.clientX, e.clientY]);
+        if (!ptr.has(e.pointerId)) return; const old = ptr.get(e.pointerId), f = cv.width / cv.getBoundingClientRect().width; ptr.set(e.pointerId, [e.clientX, e.clientY]);
         if (ptr.size === 1) { ox += (e.clientX - old[0]) * f; oy += (e.clientY - old[1]) * f; }
         else { const d = dist(); if (pd) zoom = clamp(zoom * d / pd, 1, 4); pd = d; zr.value = zoom; }
         redraw();
@@ -610,8 +625,8 @@ async function initDashboard() {
       cv.onkeydown = (e) => { const m = { ArrowLeft: [-8, 0], ArrowRight: [8, 0], ArrowUp: [0, -8], ArrowDown: [0, 8] }[e.key]; if (m) { e.preventDefault(); ox += m[0]; oy += m[1]; redraw(); } };
       zr.oninput = () => { zoom = +zr.value; redraw(); };
       tin.oninput = bin.oninput = redraw;
-      const setShape = (v) => { shape = v; bsq.classList.toggle("on", v === "square"); bci.classList.toggle("on", v === "circle"); redraw(); };
-      bsq.onclick = () => setShape("square"); bci.onclick = () => setShape("circle");
+      const setShape = (v) => { shape = v; bsq.classList.toggle("on", v === "square"); bro.classList.toggle("on", v === "rounded"); bci.classList.toggle("on", v === "circle"); bfu.classList.toggle("on", v === "full"); ox = oy = 0; redraw(); };
+      bsq.onclick = () => setShape("square"); bro.onclick = () => setShape("rounded"); bci.onclick = () => setShape("circle"); bfu.onclick = () => setShape("full");
       bbo.onclick = () => { border = !border; bbo.classList.toggle("on", border); bbo.setAttribute("aria-pressed", String(border)); redraw(); };
       const done = (v) => { document.removeEventListener("keydown", onKey, true); back.remove(); if (prev && prev.focus) prev.focus(); resolve(v); };
       const onKey = (e) => {
@@ -823,7 +838,7 @@ async function initDashboard() {
     if (!(await dialog({ title: "Hapus chat?", desc: "Seluruh isi chat ini dihapus dari akunmu saja. Lawan bicara tetap menyimpannya, dan pesan baru akan muncul lagi.", ok: "Hapus chat" }))) return;
     try { await api("/chats/clear", { method: "POST", body: JSON.stringify({ peer: key }) }); } catch (e) { return toast(e.message); }
     delete st.last[key]; delete st.lastT[key];
-    if (st.cur === key) $("#msgs").replaceChildren();
+    if (st.cur === key) { $("#msgs").replaceChildren(); st.day = ""; }
     render(); toast("Chat dihapus");
   }
   const clearBtn = (key, close) => { const b = mk("button", "Hapus chat", "btn full"); b.type = "button"; b.onclick = () => { close(); clearChat(key); }; return b; };

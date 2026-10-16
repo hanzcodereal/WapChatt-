@@ -423,3 +423,12 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 .pollrow input{flex:1;min-width:0}
 .pollrow button{flex:none}
 .dlg.sh{display:grid;gap:.7rem}
+
+/* ----- balasan jawaban, pemisah tanggal ----- */
+.qrep{flex-basis:100%;margin:.3rem 0 0 .4rem;padding-left:.5rem;border-left:3px solid var(--y);font-size:.82rem}
+.item .qrep b{display:inline;margin-right:.4rem;overflow:visible;white-space:normal}
+.qrep span{white-space:normal;overflow-wrap:anywhere}
+.qrep .plink{margin-left:.5rem}
+.qact{flex-basis:100%;display:flex;justify-content:flex-end;gap:.9rem}
+.dsep{align-self:center;background:#fff;border:2px solid var(--ink);box-shadow:2px 2px 0 var(--ink);padding:.15rem .75rem;margin:.5rem 0;font:700 .72rem "JetBrains Mono",monospace}
+.mk-cv{aspect-ratio:auto;max-height:46dvh;object-fit:contain}
