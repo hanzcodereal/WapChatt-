@@ -396,3 +396,30 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 .grow .bub{max-width:calc(100% - 44px);min-width:0}
 .gav{width:34px;height:34px;font-size:.95rem;border-width:2px;cursor:pointer}
 .dlg-d{white-space:pre-line;overflow-wrap:anywhere}
+
+/* ----- komentar status, diteruskan, polling, pertanyaan ----- */
+.svreply{display:flex;gap:.5rem;padding:.6rem;background:var(--y);border-top:3px solid var(--ink)}
+.svreply[hidden]{display:none}
+.svreply input{flex:1;min-width:0;border:3px solid var(--ink);padding:.6rem;font:inherit;background:#fff}
+.fwdl,.stq{display:block;font-size:.7rem;color:var(--mut);font-style:italic;margin-bottom:.15rem}
+.stq{border-left:3px solid var(--y);padding-left:.4rem;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bub.rich{width:min(88%,340px)}
+.bub.rich>div:first-child{width:100%}
+.pollw,.qnaw{display:block}
+.pollw .ph,.qnaw .ph{display:flex;align-items:center;gap:.35rem;font-size:.68rem;font-weight:700;letter-spacing:.05em;color:var(--mut)}
+.pollw .ph .ic,.qnaw .ph .ic{width:.9rem;height:.9rem}
+.pollw h4,.qnaw h4{margin:.25rem 0 .1rem;font-size:.95rem;word-break:break-word}
+.pollw small,.qnaw small{display:block;color:var(--mut);font-size:.72rem}
+.popt{position:relative;display:flex;justify-content:space-between;gap:.5rem;width:100%;text-align:left;border:2px solid var(--ink);background:#fff;padding:.45rem .6rem;margin:.3rem 0 0;font:inherit;cursor:pointer;overflow:hidden;color:var(--ink)}
+.popt .bar{position:absolute;inset:0 auto 0 0;background:rgba(255,214,0,.6);z-index:0;transition:width .3s}
+.popt span{position:relative;z-index:1;word-break:break-word}
+.popt .pn{font-weight:700;flex:none}
+.popt.on{border-color:var(--red);box-shadow:2px 2px 0 var(--red)}
+.pfoot{display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-top:.4rem}
+.plink{background:none;border:0;padding:0;font:700 .72rem "JetBrains Mono",monospace;color:var(--red);cursor:pointer;text-decoration:underline}
+.qbtns{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+.qbtns .btn{padding:.4rem .7rem;font-size:.75rem}
+.pollrow{display:flex;gap:.4rem;margin:.3rem 0}
+.pollrow input{flex:1;min-width:0}
+.pollrow button{flex:none}
+.dlg.sh{display:grid;gap:.7rem}

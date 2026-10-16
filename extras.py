@@ -1,13 +1,16 @@
 """Fitur tambahan WapChatt (file terpisah supaya app.py tidak terlalu panjang).
 
 - Sematkan pesan       : tabel pinned_msgs (24 jam / 7 hari / 30 hari / tanpa batas)
+- Polling              : tabel polls, poll_options, poll_votes (grup, chat pribadi, saluran; di saluran suara anonim)
+- Pertanyaan saluran   : tabel questions, q_answers (jawaban anonim, penulisnya tidak pernah dikirim ke siapa pun)
+- Teruskan pesan       : POST /api/forward
 - Link grup            : tabel room_invites (kode undangan acak per grup; link saluran dan profil tidak butuh tabel)
 - Bintangi pesan       : tabel star_msgs (pribadi, hanya terlihat pemilik)
 - Centang biru saluran : tabel room_flags (otomatis di 1000 pengikut, atau diatur owner)
 
 Semua tabel BARU, jadi database Neon yang sudah ada tidak perlu migrasi (dibuat otomatis oleh init_db()).
 """
-import secrets
+import re, secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, func, or_
@@ -15,6 +18,10 @@ from database import Base, Message, Room, RoomMember, User
 
 VERIFY_AT = 1000           # jumlah pengikut untuk centang biru otomatis
 MAX_PINS = 3               # jumlah pesan yang bisa disematkan per chat
+MAX_FWD = 5                # maksimal tujuan sekali teruskan (seperti WhatsApp)
+POLL_RE = re.compile(r"^\[poll:(\d+)\]")
+QNA_RE = re.compile(r"^\[qna:(\d+)\]")
+OFFICIAL = "NOVA"          # diisi ulang oleh register()
 PIN_HOURS = {24, 168, 720}  # 24 jam, 7 hari, 30 hari (0 / kosong = tanpa batas)
 
 
@@ -33,6 +40,51 @@ class StarMsg(Base):
     id = Column(Integer, primary_key=True)
     owner = Column(String(12), nullable=False, index=True)
     msg_id = Column(Integer, nullable=False, index=True)
+
+
+class Poll(Base):
+    __tablename__ = "polls"
+    id = Column(Integer, primary_key=True)
+    msg_id = Column(Integer, index=True)
+    chat = Column(String(12), nullable=False, index=True)   # to_id pesan: "R-<id>" atau ID pengguna
+    owner = Column(String(12), nullable=False, index=True)
+    question = Column(String(200), nullable=False)
+    multi = Column(Boolean, default=False)
+    anon = Column(Boolean, default=False)                     # saluran: pemilih tidak ditampilkan
+
+
+class PollOption(Base):
+    __tablename__ = "poll_options"
+    id = Column(Integer, primary_key=True)
+    poll_id = Column(Integer, nullable=False, index=True)
+    idx = Column(Integer, nullable=False)
+    text = Column(String(100), nullable=False)
+
+
+class PollVote(Base):
+    __tablename__ = "poll_votes"
+    id = Column(Integer, primary_key=True)
+    poll_id = Column(Integer, nullable=False, index=True)
+    voter = Column(String(12), nullable=False, index=True)
+    opt = Column(Integer, nullable=False)
+
+
+class Question(Base):
+    __tablename__ = "questions"
+    id = Column(Integer, primary_key=True)
+    msg_id = Column(Integer, index=True)
+    chat = Column(String(12), nullable=False, index=True)
+    owner = Column(String(12), nullable=False, index=True)
+    question = Column(String(300), nullable=False)
+
+
+class QAnswer(Base):
+    __tablename__ = "q_answers"
+    id = Column(Integer, primary_key=True)
+    q_id = Column(Integer, nullable=False, index=True)
+    author = Column(String(12), nullable=False, index=True)   # hanya dipakai server (ganti/hapus jawaban sendiri), TIDAK PERNAH dikirim ke klien
+    text = Column(String(500), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class RoomInvite(Base):
@@ -92,6 +144,23 @@ def in_chat(m, me, peer):
     return {m.sender, m.to_id} == {me, peer}
 
 
+def can_post(db, me, to):
+    """Aturan sama dengan /api/send: saluran hanya pemilik, grup anggota, chat pribadi ke pengguna yang ada."""
+    if to == OFFICIAL:
+        return False
+    rid = room_of(to)
+    if to.startswith("R-"):
+        r = db.get(Room, rid) if rid else None
+        return bool(r) and bool(db.query(RoomMember.id).filter_by(room_id=r.id, player_id=me).first()) and (r.kind == "group" or r.owner == me)
+    return bool(db.query(User.id).filter_by(player_id=to).first())
+
+
+def room_kind(db, to):
+    rid = room_of(to)
+    r = db.get(Room, rid) if rid else None
+    return r.kind if r else None
+
+
 def can_pin_in(db, me, peer):
     rid = room_of(peer)
     if rid is None:
@@ -100,13 +169,32 @@ def can_pin_in(db, me, peer):
     return bool(r) and can_chat(db, me, peer) and (r.kind == "group" or r.owner == me)  # saluran: hanya pemilik
 
 
+def drop_polls(db, cond):
+    ids = [i for (i,) in db.query(Poll.id).filter(cond)]
+    if ids:
+        for M in (PollVote, PollOption):
+            db.query(M).filter(M.poll_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Poll).filter(Poll.id.in_(ids)).delete(synchronize_session=False)
+
+
+def drop_questions(db, cond):
+    ids = [i for (i,) in db.query(Question.id).filter(cond)]
+    if ids:
+        db.query(QAnswer).filter(QAnswer.q_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Question).filter(Question.id.in_(ids)).delete(synchronize_session=False)
+
+
 def on_msg_delete(db, m):
+    drop_polls(db, Poll.msg_id == m.id)
+    drop_questions(db, Question.msg_id == m.id)
     db.query(PinnedMsg).filter(PinnedMsg.msg_id == m.id).delete(synchronize_session=False)
     db.query(StarMsg).filter(StarMsg.msg_id == m.id).delete(synchronize_session=False)
 
 
 def on_room_purge(db, rid):
     tag = "R-%d" % rid
+    drop_polls(db, Poll.chat == tag)
+    drop_questions(db, Question.chat == tag)
     mids = [i for (i,) in db.query(Message.id).filter(Message.to_id == tag)]
     if mids:
         db.query(StarMsg).filter(StarMsg.msg_id.in_(mids)).delete(synchronize_session=False)
@@ -116,11 +204,176 @@ def on_room_purge(db, rid):
 
 
 def on_user_purge(db, pid):
+    drop_polls(db, or_(Poll.owner == pid, Poll.chat == pid))
+    drop_questions(db, or_(Question.owner == pid, Question.chat == pid))
+    db.query(PollVote).filter(PollVote.voter == pid).delete(synchronize_session=False)
+    db.query(QAnswer).filter(QAnswer.author == pid).delete(synchronize_session=False)
     db.query(StarMsg).filter(StarMsg.owner == pid).delete(synchronize_session=False)
     db.query(PinnedMsg).filter(PinnedMsg.by == pid).delete(synchronize_session=False)
 
 
-def register(app, authed, owner_only, Session):
+def register(app, authed, owner_only, Session, official="NOVA"):
+    global OFFICIAL
+    OFFICIAL = official
+
+    # ---------- polling ----------
+    def poll_dict(db, me, p):
+        opts = db.query(PollOption).filter_by(poll_id=p.id).order_by(PollOption.idx).all()
+        votes = db.query(PollVote).filter_by(poll_id=p.id).all()
+        cnt, voters = {}, {}
+        for v in votes:
+            cnt[v.opt] = cnt.get(v.opt, 0) + 1
+            voters.setdefault(v.opt, []).append(v.voter)
+        out = {"id": p.id, "question": p.question, "multi": bool(p.multi), "anon": bool(p.anon),
+               "total": len({v.voter for v in votes}), "mine": sorted(v.opt for v in votes if v.voter == me),
+               "options": [{"i": o.idx, "text": o.text, "n": cnt.get(o.idx, 0)} for o in opts]}
+        if not p.anon:  # grup / chat pribadi: pemilih terlihat seperti di WhatsApp
+            for o in out["options"]:
+                o["voters"] = voters.get(o["i"], [])
+        return out
+
+    @app.post("/api/polls")
+    @authed
+    def poll_create(db, u):
+        d = request.get_json(silent=True) or {}
+        to, q = str(d.get("to") or ""), str(d.get("question") or "").strip()[:200]
+        opts = []
+        for t in d.get("options") or []:
+            t = str(t).strip()[:100]
+            if t and t not in opts:
+                opts.append(t)
+        if not q or len(opts) < 2 or len(opts) > 12:
+            return jsonify(error="Isi pertanyaan dan minimal 2 pilihan jawaban (maksimal 12)."), 400
+        if not can_post(db, u.player_id, to):
+            return jsonify(error="Kamu tidak bisa membuat polling di chat ini."), 403
+        p = Poll(chat=to, owner=u.player_id, question=q, multi=bool(d.get("multi")), anon=room_kind(db, to) == "channel")
+        db.add(p)
+        db.flush()
+        for i, t in enumerate(opts):
+            db.add(PollOption(poll_id=p.id, idx=i, text=t))
+        m = Message(sender=u.player_id, to_id=to, kind="text", body="[poll:%d]%s" % (p.id, q))
+        db.add(m)
+        db.flush()
+        p.msg_id = m.id
+        db.commit()
+        return jsonify(m.public()), 201
+
+    def poll_for(db, me, pid):
+        p = db.get(Poll, pid)
+        m = db.get(Message, p.msg_id) if p and p.msg_id else None
+        return p if m and can_see(db, me, m) else None
+
+    @app.get("/api/polls/<int:pid>")
+    @authed
+    def poll_get(db, u, pid):
+        p = poll_for(db, u.player_id, pid)
+        return jsonify(poll=poll_dict(db, u.player_id, p)) if p else (jsonify(error="Polling tidak ditemukan."), 404)
+
+    @app.post("/api/polls/<int:pid>/vote")
+    @authed
+    def poll_vote(db, u, pid):
+        p = poll_for(db, u.player_id, pid)
+        if not p:
+            return jsonify(error="Polling tidak ditemukan."), 404
+        valid = {o.idx for o in db.query(PollOption).filter_by(poll_id=pid)}
+        sel = {i for i in ((request.get_json(silent=True) or {}).get("options") or []) if isinstance(i, int) and i in valid}
+        if not p.multi:
+            sel = set(sorted(sel)[:1])
+        db.query(PollVote).filter_by(poll_id=pid, voter=u.player_id).delete(synchronize_session=False)
+        for i in sel:
+            db.add(PollVote(poll_id=pid, voter=u.player_id, opt=i))
+        db.commit()
+        return jsonify(poll=poll_dict(db, u.player_id, p))
+
+    # ---------- pertanyaan saluran (jawaban anonim) ----------
+    def q_for(db, me, qid):
+        q = db.get(Question, qid)
+        m = db.get(Message, q.msg_id) if q and q.msg_id else None
+        return q if m and can_see(db, me, m) else None
+
+    def q_dict(db, me, q):
+        rows = db.query(QAnswer).filter_by(q_id=q.id).order_by(QAnswer.id.desc()).limit(200).all()
+        n = db.query(func.count(QAnswer.id)).filter_by(q_id=q.id).scalar() or 0
+        # penulis sengaja TIDAK disertakan; "mine" hanya true untuk jawaban milik peminta sendiri
+        return {"id": q.id, "question": q.question, "count": n, "is_owner": q.owner == me,
+                "answers": [{"id": a.id, "text": a.text, "t": iso(a.created_at), "mine": a.author == me} for a in rows]}
+
+    @app.post("/api/questions")
+    @authed
+    def q_create(db, u):
+        d = request.get_json(silent=True) or {}
+        to, text = str(d.get("to") or ""), str(d.get("question") or "").strip()[:300]
+        if not text:
+            return jsonify(error="Pertanyaan tidak boleh kosong."), 400
+        if room_kind(db, to) != "channel" or not can_post(db, u.player_id, to):
+            return jsonify(error="Pertanyaan hanya bisa dibuat pemilik di salurannya sendiri."), 403
+        q = Question(chat=to, owner=u.player_id, question=text)
+        db.add(q)
+        db.flush()
+        m = Message(sender=u.player_id, to_id=to, kind="text", body="[qna:%d]%s" % (q.id, text))
+        db.add(m)
+        db.flush()
+        q.msg_id = m.id
+        db.commit()
+        return jsonify(m.public()), 201
+
+    @app.get("/api/questions/<int:qid>")
+    @authed
+    def q_get(db, u, qid):
+        q = q_for(db, u.player_id, qid)
+        return jsonify(q=q_dict(db, u.player_id, q)) if q else (jsonify(error="Pertanyaan tidak ditemukan."), 404)
+
+    @app.post("/api/questions/<int:qid>/answer")
+    @authed
+    def q_answer(db, u, qid):
+        q = q_for(db, u.player_id, qid)
+        text = str((request.get_json(silent=True) or {}).get("text") or "").strip()[:500]
+        if not q or not text:
+            return jsonify(error="Jawaban tidak boleh kosong."), 400
+        a = db.query(QAnswer).filter_by(q_id=qid, author=u.player_id).first()  # satu jawaban per orang; menjawab lagi = mengganti
+        if a:
+            a.text = text
+        else:
+            db.add(QAnswer(q_id=qid, author=u.player_id, text=text))
+        db.commit()
+        return jsonify(q=q_dict(db, u.player_id, q))
+
+    @app.delete("/api/answers/<int:aid>")
+    @authed
+    def q_answer_del(db, u, aid):
+        a = db.get(QAnswer, aid)
+        q = db.get(Question, a.q_id) if a else None
+        if not a or not q or (a.author != u.player_id and q.owner != u.player_id):
+            return jsonify(error="Jawaban tidak ditemukan."), 404
+        db.delete(a)
+        db.commit()
+        return jsonify(ok=True)
+
+    # ---------- teruskan pesan ----------
+    @app.post("/api/forward")
+    @authed
+    def forward(db, u):
+        d = request.get_json(silent=True) or {}
+        m = db.get(Message, d.get("msg_id")) if isinstance(d.get("msg_id"), int) else None
+        tos = list(dict.fromkeys(str(x) for x in (d.get("to") or [])))
+        if not m or m.kind != "text" or not can_see(db, u.player_id, m):
+            return jsonify(error="Pesan tidak ditemukan."), 404
+        if not tos or len(tos) > MAX_FWD:
+            return jsonify(error="Pilih 1 sampai %d tujuan." % MAX_FWD), 400
+        body = m.body or ""
+        if body.startswith(("[poll:", "[qna:")):
+            return jsonify(error="Polling dan pertanyaan tidak bisa diteruskan."), 400
+        body = re.sub(r"^\[(re:\d+|st:[^\]]*)\]", "", body)  # kutipan balasan / status tidak ikut diteruskan
+        if not body.startswith(("[stk:", "[fwd]")):
+            body = "[fwd]" + body
+        body = body[:4000]
+        if any(not can_post(db, u.player_id, t) for t in tos):
+            return jsonify(error="Tidak bisa meneruskan ke salah satu tujuan (saluran hanya untuk pemiliknya)."), 403
+        out = [Message(sender=u.player_id, to_id=t, kind="text", body=body) for t in tos]
+        db.add_all(out)
+        db.commit()
+        return jsonify(messages=[x.public() for x in out]), 201
+
     # ---------- sematkan pesan ----------
     @app.get("/api/pins")
     @authed

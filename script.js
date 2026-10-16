@@ -73,8 +73,14 @@ async function initDashboard() {
   const STK = /^\[stk:([0-9a-f]{24})\]$/;
   const stkId = (b) => { const m = STK.exec(b || ""); return m && m[1]; };
   const RE = /^\[re:(\d+)\]([\s\S]*)$/;
-  const parseRe = (b) => { const m = RE.exec(b || ""); return m ? { id: +m[1], text: m[2] } : { id: 0, text: b || "" }; };
-  const lastText = (b) => (stkId(b) ? "Stiker" : parseRe(b).text);
+  const FWD = /^\[fwd\]([\s\S]*)$/, STR = /^\[st:([^\]]*)\]([\s\S]*)$/;  // diteruskan / balasan untuk status
+  const parseRe = (b) => {
+    let m = RE.exec(b || ""); if (m) return { id: +m[1], text: m[2] };
+    if ((m = FWD.exec(b || ""))) return { id: 0, text: m[1], fwd: true };
+    if ((m = STR.exec(b || ""))) return { id: 0, text: m[2], st: m[1] };
+    return { id: 0, text: b || "" };
+  };
+  const lastText = (b) => (X.preview && X.preview(b)) || (stkId(b) ? "Stiker" : parseRe(b).text);
   const sha24 = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].slice(0, 12).map((x) => x.toString(16).padStart(2, "0")).join("");
   /* Kotak dialog bergaya WapChatt, pengganti prompt() bawaan browser. Hasil: objek isian, atau null kalau dibatalkan. */
   function dialog({ title, desc, fields = [], contacts = null, contactsLabel = "", ok = "Simpan", actions = [] }) {
@@ -345,7 +351,13 @@ async function initDashboard() {
     if (m.id) st.byId[m.id] = m;
     d.dataset.mid = m.id || "";
     if (sid) { const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
-    else { if (rp.id) box.append(quote(rp.id)); box.append(mk("span", rp.text)); }
+    else if (X.fill && X.fill(box, m, d)) { /* polling / pertanyaan */ }
+    else {
+      if (rp.fwd) box.append(mk("small", "Diteruskan", "fwdl"));
+      if (rp.st != null) box.append(mk("small", "Membalas status" + (rp.st ? ": " + rp.st : ""), "stq"));
+      if (rp.id) box.append(quote(rp.id));
+      box.append(mk("span", rp.text));
+    }
     if (X.menuBtn) X.menuBtn(mt, d, m, mine, sid);  // Balas, bintang, sematkan, salin, hapus: semuanya di titik tiga
     mt.append(mk("time", tm(m.t)));
     if (mine) { d.dataset.to = m.to; d.dataset.t = m.t; mt.append(tick(m)); }
@@ -905,6 +917,7 @@ async function initDashboard() {
       const mineS = s.owner === me.player_id;
       if (!mineS && !seenSt.has(s.id)) { seenSt.add(s.id); api("/stories/" + s.id + "/view", { method: "POST" }).catch(() => {}); }
       $("#svviews").hidden = $("#svdel").hidden = !mineS;
+      $("#svreply").hidden = mineS; $("#svin").value = "";
       if (mineS) {
         $("#svvn").textContent = "...";
         api("/stories/" + s.id + "/views").then((r) => { if (list[i] === s) $("#svvn").textContent = r.views.length; }).catch(() => {});
@@ -921,6 +934,16 @@ async function initDashboard() {
       if (s.kind === "img") { const im = mk("img"); im.src = s.body; b.append(im); b.style.background = "#000"; }
       else { b.append(mk("p", s.body)); b.style.background = "hsl(" + hue(s.body) + ",85%,78%)"; }
       $("#svwho").textContent = nameOf(p) + " · " + fmt(s.t) + " (" + (i + 1) + "/" + list.length + ")";
+    };
+    $("#svreply").onsubmit = async (e) => {  // komentar status masuk ke chat pribadi, seperti WhatsApp
+      e.preventDefault();
+      const t = $("#svin").value.trim(), s = list[i]; if (!t || !s) return;
+      const snip = (s.kind === "img" ? "Foto" : s.body).replace(/[\[\]\r\n]+/g, " ").trim().slice(0, 40);
+      $("#svin").value = "";
+      try {
+        const m = await send(p, "text", "[st:" + snip + "]" + t);
+        st.last[p] = m.body; st.lastT[p] = m.t; render(); toast("Balasan dikirim ke chat pribadi dengan " + nameOf(p));
+      } catch (err) { $("#svin").value = t; toast(err.message); }
     };
     $("#sv").hidden = false; draw();
     $("#svbody").onclick = () => (++i >= list.length ? ($("#sv").hidden = true) : draw());
@@ -954,14 +977,28 @@ async function initDashboard() {
   api("/ice").then((r) => r.iceServers && (ICE = { iceServers: r.iceServers })).catch(() => {});
   const MAXP = 4;
   const peers = {};              // ID teman -> { pc, pend, sdpSent, up, tile, conT }
-  const expected = new Set();    // peserta yang diundang anggota panggilan lain: offer-nya diterima otomatis
+  const expected = new Map();    // peserta yang diundang anggota panggilan lain (ID -> kadaluarsa): offer-nya diterima otomatis
+  const expect = (id) => expected.set(id, Date.now() + 120000);
+  const isExpected = (id) => (expected.get(id) || 0) > Date.now();
+  const callInfo = {};           // nama + foto orang yang belum disimpan sebagai kontak (diambil dari server)
+  const pname = (p) => { const n = nameOf(p); return n && n !== p ? n : (callInfo[p] && callInfo[p].full_name) || n || p; };
+  const pimg = (p) => imgOf(p) || (callInfo[p] && callInfo[p].avatar) || "";
+  async function learn(pid) {  // tampilkan nama asli, bukan ID, untuk peserta yang bukan kontakmu
+    if (!pid || pid === me.player_id || pid === OFFICIAL || nameOf(pid) !== pid || callInfo[pid]) return;
+    callInfo[pid] = { full_name: pid, avatar: "" };
+    try { callInfo[pid] = (await api("/users/" + pid)).user; } catch {}
+    const p = peers[pid];
+    if (p) { p.tile.nm.textContent = pname(pid); p.tile.ov.replaceChildren(av(pname(pid), pimg(pid))); layout(); }
+    if (incoming && incoming.from === pid) { $("#iav").replaceChildren(av(pname(pid), pimg(pid))); $("#inwho").textContent = pname(pid); }
+    if (inCall() && !t0) showHead(pid, $("#cstat").textContent);
+  }
   let stream, incoming = null, video = true, facing = "user", t0 = 0, tmr, ringT, ringCtx;
   const peerIds = () => Object.keys(peers);
   const inCall = () => !$("#call").hidden;
   const sigTo = (to, type, data) => send(to, "sig", JSON.stringify({ type, data })).catch(() => {});
   const fmtT = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
   function showHead(p, label) {  // layar sebelum tersambung
-    $("#cav").replaceChildren(av(nameOf(p), imgOf(p))); $("#cname").textContent = $("#ctopn").textContent = nameOf(p);
+    $("#cav").replaceChildren(av(pname(p), pimg(p))); $("#cname").textContent = $("#ctopn").textContent = pname(p);
     $("#cstat").textContent = label; $("#ctime").textContent = "";
   }
   function started() {  // dipanggil saat sambungan pertama benar-benar tersambung
@@ -1000,14 +1037,14 @@ async function initDashboard() {
   function layout() {
     const ids = peerIds();
     $("#tiles").className = "tiles n" + Math.min(Math.max(ids.length, 1), 4);
-    $("#ctopn").textContent = ids.map((i) => nameOf(i)).join(", ");
+    $("#ctopn").textContent = ids.map((i) => pname(i)).join(", ");
   }
   function mkTile(pid) {
     const el = mk("div", null, "tile"), v = mk("video"), a = mk("audio"), ov = mk("div", null, "tav"), stt = mk("small", "Menghubungkan...", "tstat");
     v.autoplay = v.playsInline = true; v.muted = true; a.autoplay = true;
-    ov.append(av(nameOf(pid), imgOf(pid)));
-    el.append(v, a, ov, mk("b", nameOf(pid), "tname"), stt); $("#tiles").append(el);
-    return { el, v, a, ov, stt, camOff: false, hasVid: false };
+    ov.append(av(pname(pid), pimg(pid)));
+    const nm = mk("b", pname(pid), "tname"); el.append(v, a, ov, nm, stt); $("#tiles").append(el);
+    return { el, v, a, ov, stt, nm, camOff: false, hasVid: false };
   }
   function dropPeer(id) {
     const p = peers[id]; if (!p) return;
@@ -1016,9 +1053,10 @@ async function initDashboard() {
   }
   function lost(id, msg) {
     sigTo(id, "end"); dropPeer(id);
-    if (!peerIds().length) hang(false, msg); else toast(nameOf(id) + ": terputus");
+    if (!peerIds().length) hang(false, msg); else toast(pname(id) + ": terputus");
   }
   function newPeer(pid) {
+    learn(pid);
     const pc = new RTCPeerConnection(ICE);
     const p = (peers[pid] = { pc, pend: [], sdpSent: false, up: false, tile: mkTile(pid), conT: 0 });
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
@@ -1058,7 +1096,7 @@ async function initDashboard() {
     try {
       await pc.setLocalDescription(await pc.createOffer()); await gathered(pc);
       if (peers[to] !== p) return;
-      p.sdpSent = true; sigTo(to, "offer", { sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }, video, group });
+      p.sdpSent = true; await sigTo(to, "offer", { sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }, video, group });
     } catch { lost(to, "Tidak bisa memulai panggilan"); }
   }
   async function answer(from, data, pend) {  // jawab offer dari satu orang
@@ -1081,18 +1119,33 @@ async function initDashboard() {
   }
   $("#vbtn").onclick = () => call(true);
   $("#abtn").onclick = () => call(false);
+  const waitUp = (id) => new Promise((res) => {  // tunggu sampai orang itu menjawab / gagal, supaya undangan berikutnya tidak bertabrakan
+    const s = Date.now(), iv = setInterval(() => { const p = peers[id]; if (!p || p.up || !stream || Date.now() - s > 45000) { clearInterval(iv); res(); } }, 500);
+  });
   async function addPeople() {
     if (!stream || !t0) return toast("Tunggu panggilan tersambung dulu");
     if (peerIds().some((id) => !peers[id].up)) return toast("Tunggu undangan sebelumnya dijawab dulu");
-    if (peerIds().length + 1 >= MAXP) return toast("Panggilan penuh (maksimal " + MAXP + " orang)");
+    const room = MAXP - 1 - peerIds().length;
+    if (room <= 0) return toast("Panggilan penuh (maksimal " + MAXP + " orang)");
     const cur = new Set([...peerIds(), me.player_id, OFFICIAL]);
-    const x = await dialog({ title: "Tambah orang ke panggilan", desc: "Pilih satu teman. Maksimal " + MAXP + " orang dalam satu panggilan.", contacts: st.contacts.filter((c) => !cur.has(c.player_id)), contactsLabel: "Teman tersimpan", ok: "Undang" });
-    if (!x || !x.members.length) return;
-    if (!stream || peerIds().some((id) => !peers[id].up)) return;  // keadaan berubah saat memilih
-    if (x.members.length > 1) toast("Satu per satu ya, saya undang " + nameOf(x.members[0]));
-    const id = x.members[0], group = peerIds();
-    group.forEach((o) => sigTo(o, "join", { pid: id }));  // beri tahu peserta lain supaya offer dari orang baru diterima otomatis
-    dial(id, group);
+    const x = await dialog({ title: "Tambah orang ke panggilan", desc: "Bisa lebih dari satu (maksimal " + room + " lagi). Mereka diundang satu per satu.",
+      fields: [{ name: "extra", label: "ID lain (opsional, pisah koma)", placeholder: "48210377, 63915204", inputmode: "numeric" }],
+      contacts: st.contacts.filter((c) => !cur.has(c.player_id)), contactsLabel: "Teman tersimpan", ok: "Undang" });
+    if (!x) return;
+    let ids = [...new Set([...(x.members || []), ...String(x.extra || "").split(/[\s,]+/).filter(Boolean)])].filter((id) => !cur.has(id));
+    if (!ids.length) return;
+    if (ids.length > room) { toast("Hanya muat " + room + " orang lagi, sisanya tidak diundang"); ids = ids.slice(0, room); }
+    for (const id of ids) {
+      if (!stream || !inCall()) return;
+      if (peerIds().length + 1 >= MAXP) return toast("Panggilan penuh (maksimal " + MAXP + " orang)");
+      if (peerIds().some((k) => !peers[k].up)) await Promise.all(peerIds().map(waitUp));
+      try { const u = (await api("/users/" + id)).user; if (!contact(id)) callInfo[id] = u; } catch { toast("ID " + id + " tidak ditemukan"); continue; }
+      const group = peerIds();
+      toast("Memanggil " + pname(id) + "...");
+      await dial(id, group);  // offer terkirim dulu, baru peserta lain diberi tahu (urutan pesan terjamin)
+      await Promise.all(group.map((o) => sigTo(o, "join", { pid: id })));
+      await waitUp(id);
+    }
   }
   $("#addbtn").onclick = addPeople;
   async function signal(from, { type, data }) {
@@ -1103,15 +1156,18 @@ async function initDashboard() {
       return;
     }
     if (type === "offer") {
-      if (expected.has(from) && stream && !p) { expected.delete(from); return answer(from, data); }  // anggota panggilan: otomatis
+      if (isExpected(from) && stream && !p) { expected.delete(from); return answer(from, data); }  // anggota panggilan: otomatis
       if (incoming || inCall()) return sigTo(from, "reject");
-      incoming = { from, offer: data, pend: [] }; video = !!data.video; t0 = 0;
+      incoming = { from, offer: data, pend: [] }; video = !!data.video; t0 = 0; learn(from);
       const n = ((data.group || []).length) + 2;
-      $("#iav").replaceChildren(av(nameOf(from), imgOf(from))); $("#inwho").textContent = nameOf(from);
+      $("#iav").replaceChildren(av(pname(from), pimg(from))); $("#inwho").textContent = pname(from);
       $("#inkind").textContent = (n > 2 ? "Panggilan grup " : "Panggilan ") + (video ? "video" : "suara") + " masuk" + (n > 2 ? " (" + n + " orang)" : "");
       $("#incoming").hidden = false; startRing(); return;
     }
-    if (type === "join") { if (p && data && data.pid) expected.add(data.pid); return; }
+    if (type === "join") {  // hanya dari peserta panggilan atau penelepon yang sedang berdering (cegah orang asing masuk diam-diam)
+      if ((p || (incoming && incoming.from === from)) && data && /^[A-Za-z0-9]{1,12}$/.test(data.pid || "")) { expect(data.pid); learn(data.pid); }
+      return;
+    }
     if (type === "cam") { if (p) { p.tile.camOff = !(data && data.on); paint(p); } return; }
     if (type === "answer") {
       if (!p || p.pc.signalingState !== "have-local-offer") return;
@@ -1124,9 +1180,9 @@ async function initDashboard() {
       if (p) {
         const msg = type === "reject" ? "Panggilan ditolak" : t0 ? "Panggilan berakhir" : "Panggilan dibatalkan";
         dropPeer(from);
-        if (!peerIds().length) hang(false, msg); else toast(nameOf(from) + (type === "reject" ? " menolak panggilan" : " keluar dari panggilan"));
+        if (!peerIds().length) hang(false, msg); else toast(pname(from) + (type === "reject" ? " menolak panggilan" : " keluar dari panggilan"));
       } else if (incoming && incoming.from === from) {  // penelepon membatalkan saat masih berdering
-        incoming = null; stopRing(); $("#incoming").hidden = true; toast("Panggilan dibatalkan");
+        incoming = null; expected.clear(); stopRing(); $("#incoming").hidden = true; toast("Panggilan dibatalkan");
       }
     }
   }
@@ -1137,9 +1193,9 @@ async function initDashboard() {
     if (incoming !== inc) return hang(false);  // dibatalkan penelepon saat menunggu izin
     incoming = null;
     await answer(inc.from, inc.offer, inc.pend);
-    (inc.offer.group || []).forEach((id) => { if (id !== me.player_id && !peers[id]) dial(id, []); });  // sambungkan juga ke peserta lain
+    (inc.offer.group || []).forEach((id) => { if (id !== me.player_id && !peers[id]) { learn(id); dial(id, []); } });  // sambungkan juga ke peserta lain
   };
-  $("#reject").onclick = () => { const inc = incoming; incoming = null; stopRing(); $("#incoming").hidden = true; if (inc) sigTo(inc.from, "reject"); };
+  $("#reject").onclick = () => { const inc = incoming; incoming = null; expected.clear(); stopRing(); $("#incoming").hidden = true; if (inc) sigTo(inc.from, "reject"); };
   $("#end").onclick = () => hang(true);
   $("#unmute").onclick = () => { Object.values(peers).forEach((p) => { p.tile.a.play().catch(() => {}); p.tile.v.play().catch(() => {}); }); $("#unmute").hidden = true; };
   $("#mute").onclick = (e) => {
@@ -1170,7 +1226,7 @@ async function initDashboard() {
   try { localStorage.removeItem("nova_lock"); } catch {}  // sisa kunci aplikasi lama
 
   /* ----- polling pesan + sinyal ----- */
-  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av }));
+  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL }));
   await Promise.all([loadContacts(), loadRooms(), loadStories(), loadChats(), loadPresence()]);
   show("home");
   if (X.consumeLink) X.consumeLink();

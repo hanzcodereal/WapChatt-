@@ -284,6 +284,8 @@ def send(db, u):
             mm = STK_RE.match(body)
             if not mm or not db.get(Sticker, mm.group(1)):
                 return jsonify(error="Stiker tidak ditemukan."), 400
+    if kind == "text" and body.startswith(("[poll:", "[qna:", "[fwd]")):
+        return jsonify(error="Pesan tidak valid."), 400
     if kind == "text" and to == OFFICIAL:
         return jsonify(error="Akun resmi hanya mengirim pengumuman."), 400
     if kind == "text" and to.startswith("R-") and to[2:].isdigit():
@@ -918,7 +920,7 @@ def calls_hide(db, u):
     return jsonify(ok=True)
 
 
-extras.register(app, authed, owner_only, Session)
+extras.register(app, authed, owner_only, Session, OFFICIAL)
 
 
 @app.get("/")
