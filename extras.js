@@ -354,11 +354,24 @@ window.WCX = function (c) {
   }
   const lb = $("#linkbtn"); if (lb) lb.onclick = () => shareLink("u", c.me().player_id);
 
+  /* ---------- belum dibaca (disimpan di server) ---------- */
+  async function loadUnread() {
+    try {
+      const r = (await api("/unread")).unread;  // server = sumber kebenaran (juga menangkap chat yang sudah dibaca di perangkat lain)
+      st.unread = Object.assign({}, r); if (st.cur) st.unread[st.cur] = 0; c.render();
+    } catch {}
+  }
+  const readQ = new Set(); let readT = 0;
+  function markRead(p) {  // ditunda sebentar supaya banyak pesan beruntun jadi satu permintaan
+    readQ.add(p); clearTimeout(readT);
+    readT = setTimeout(() => { [...readQ].forEach((k) => api("/read", { method: "POST", body: JSON.stringify({ peer: k }) }).catch(() => {})); readQ.clear(); }, 1200);
+  }
+
   const sb = $("#starbtn"); if (sb) sb.onclick = showStars;
   loadStars();
 
   return {
-    preview, fill, menuBtn, showPins, showStars, shareLink, consumeLink,
+    preview, fill, menuBtn, showPins, showStars, shareLink, consumeLink, loadUnread, markRead,
     opened() { pins = []; canPin = false; pinIdx = 0; paintBar(); loadPins(); },  // dipanggil tiap chat dibuka
   };
 };

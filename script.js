@@ -170,7 +170,11 @@ async function initDashboard() {
       const m = mk("div", null, "meta");
       if (o.time) m.append(mk("span", o.time));
       if (o.icon) m.append(o.icon);
-      if (o.badge) m.append(mk("i", o.badge, "dot"));
+      if (o.badge) {
+        const n = typeof o.badge === "number", b = mk("i", n ? (o.badge > 99 ? "99+" : String(o.badge)) : o.badge, "dot" + (n ? " cnt" : ""));
+        if (n) { b.setAttribute("aria-label", o.badge + " pesan belum dibaca"); li.classList.add("unread"); }
+        m.append(b);
+      }
       li.append(m);
     }
     li.tabIndex = 0; li.onclick = onclick; li.onkeydown = (e) => e.key === "Enter" && onclick();
@@ -212,16 +216,30 @@ async function initDashboard() {
       return b;
     }));
     const E = st.contacts.map((c) => ({ p: c.player_id, n: c.full_name, i: c.avatar, k: "dm", v: c.verified, tag: c.owner ? "OWNER" : "" }));
-    st.rooms.filter((r) => r.kind === "group" || r.joined).forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind, i: r.avatar, v: !!r.verified }));
+    st.rooms.filter((r) => r.kind === "group").forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind, i: r.avatar, v: !!r.verified }));
     E.push({ p: me.player_id, n: "Catatan saya", i: me.avatar, k: "dm", tag: "KAMU" });
     Object.keys(st.last).forEach((k) => { if (!isRoom(k) && !saved(k) && k !== me.player_id) E.push({ p: k, n: nameOf(k), i: imgOf(k), k: "dm", v: k === OFFICIAL, tag: k === OFFICIAL ? "RESMI" : "" }); });
-    const F = E.filter((e) => (st.filter === "all" || e.k === st.filter) && (e.n + e.p).toLowerCase().includes(q))
+    const flt = { all: () => true, unread: (e) => (st.unread[e.p] || 0) > 0, fav: (e) => isPinned(e.p), group: (e) => e.k === "group" };
+    document.querySelectorAll("#chips button").forEach((b) => {  // jumlah di Belum dibaca, Favorit, Grup
+      const n = flt[b.dataset.f] && b.dataset.f !== "all" ? E.filter(flt[b.dataset.f]).length : 0, cn = b.querySelector(".cn");
+      if (cn) { cn.hidden = !n; cn.textContent = n; }
+    });
+    const F = E.filter((e) => (flt[st.filter] || flt.all)(e) && (e.n + e.p).toLowerCase().includes(q))
       .sort((a, b) => (isPinned(b.p) - isPinned(a.p)) || ((Date.parse(st.lastT[b.p]) || 0) - (Date.parse(st.lastT[a.p]) || 0)));
     $("#empty-list").hidden = F.length > 0;
     $("#empty-list").textContent = E.length ? "Tidak ada chat yang cocok." : "Belum ada chat. Tap + lalu masukkan ID temanmu untuk menyimpannya.";
     $("#list").replaceChildren(...F.map((e) => row(e.i, e.n, lastText(st.last[e.p]) || (e.k === "dm" ? e.p : e.k === "group" ? "Grup" : "Saluran"), () => open(e.p),
       { time: st.lastT[e.p] ? short(st.lastT[e.p]) : "", badge: st.unread[e.p] || "", verified: e.v, tag: e.tag, avEl: e.k === "dm" || e.i ? null : chAv(e.k), online: e.k === "dm" && !!(st.seen[e.p] && st.seen[e.p].online) })));
     [...$("#list").children].forEach((li, i) => { if (F[i] && isPinned(F[i].p)) { li.classList.add("pinned"); li.append(mk("small", "Disematkan", "pinmark")); } });
+
+    /* lingkaran di navigasi: Chat = jumlah pesan belum dibaca (tanpa saluran), Pembaruan = titik tanpa angka */
+    const setNb = (id, n, num, name) => {
+      const el = $(id), b = el.closest("button"); el.hidden = !n; if (num) el.textContent = n > 99 ? "99+" : n;
+      b.setAttribute("aria-label", name + (n ? (num ? ", " + n + " pesan belum dibaca" : ", ada pembaruan baru") : ""));
+    };
+    const chatUnread = Object.entries(st.unread).reduce((s, [k, v]) => s + (v > 0 && !(isRoom(k) && (roomOf(k) || {}).kind === "channel") ? v : 0), 0);
+    setNb("#nbchat", chatUnread, true, "Chat");
+    setNb("#nbupd", st.stories.some((s) => s.owner !== me.player_id && !s.seen) || st.rooms.some((r) => r.kind === "channel" && r.joined && r.owner !== me.player_id && (st.unread["R-" + r.id] || 0) > 0) ? 1 : 0, false, "Pembaruan");
 
     /* Pembaruan: kartu status */
     const card = (o, label, onclick) => {
@@ -238,9 +256,9 @@ async function initDashboard() {
 
     /* Saluran */
     const chs = st.rooms.filter((r) => r.kind === "channel");
-    const chRow = (r) => row(r.avatar || null, r.name, r.count + " pengikut" + (r.about ? " · " + r.about : ""), () => (r.joined ? open("R-" + r.id) : joinCh(r.id)),
-      { verified: r.verified, avEl: r.avatar ? null : chAv("channel"), badge: r.owner === me.player_id ? "ADMIN" : st.unread["R-" + r.id] || "", icon: r.joined ? null : ic("plus", "pbtn") });
-    const mineCh = chs.filter((r) => r.joined), finds = chs.filter((r) => !r.joined);
+    const chRow = (r) => row(r.avatar || null, r.name, (r.joined && st.last["R-" + r.id] ? lastText(st.last["R-" + r.id]) : r.count + " pengikut" + (r.about ? " · " + r.about : "")), () => (r.joined ? open("R-" + r.id) : joinCh(r.id)),
+      { time: r.joined && st.lastT["R-" + r.id] ? short(st.lastT["R-" + r.id]) : "", verified: r.verified, avEl: r.avatar ? null : chAv("channel"), tag: r.owner === me.player_id ? "ADMIN" : "", badge: r.joined && r.owner !== me.player_id ? st.unread["R-" + r.id] || "" : "", icon: r.joined ? null : ic("plus", "pbtn") });
+    const mineCh = chs.filter((r) => r.joined).sort((a, b) => (Date.parse(st.lastT["R-" + b.id]) || 0) - (Date.parse(st.lastT["R-" + a.id]) || 0)), finds = chs.filter((r) => !r.joined);
     $("#mych").replaceChildren(...mineCh.map(chRow));
     $("#find-h").hidden = !finds.length;
     $("#finds").replaceChildren(...finds.slice(0, 5).map(chRow));
@@ -382,6 +400,7 @@ async function initDashboard() {
   async function open(p) {
     st.cur = p; st.unread[p] = 0;
     if (X.opened) X.opened();
+    if (X.markRead) X.markRead(p);
     const r = roomOf(p);
     $("#rtitle").textContent = p === me.player_id ? "Catatan saya" : nameOf(p);
     const ct = contact(p); if (ct && ct.owner) $("#rtitle").append(mk("i", "OWNER", "own")); if (p === OFFICIAL) $("#rtitle").append(mk("i", "RESMI", "own"));
@@ -930,7 +949,7 @@ async function initDashboard() {
     const draw = () => {
       const s = list[i], b = $("#svbody"); b.replaceChildren();
       const mineS = s.owner === me.player_id;
-      if (!mineS && !seenSt.has(s.id)) { seenSt.add(s.id); api("/stories/" + s.id + "/view", { method: "POST" }).catch(() => {}); }
+      if (!mineS && !seenSt.has(s.id)) { seenSt.add(s.id); s.seen = true; render(); api("/stories/" + s.id + "/view", { method: "POST" }).catch(() => {}); }
       $("#svviews").hidden = $("#svdel").hidden = !mineS;
       $("#svreply").hidden = mineS; $("#svin").value = "";
       if (mineS) {
@@ -1243,6 +1262,7 @@ async function initDashboard() {
   /* ----- polling pesan + sinyal ----- */
   if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL }));
   await Promise.all([loadContacts(), loadRooms(), loadStories(), loadChats(), loadPresence()]);
+  if (X.loadUnread) await X.loadUnread();
   show("home");
   if (X.consumeLink) X.consumeLink();
   /* ----- panel owner ----- */
@@ -1323,13 +1343,13 @@ async function initDashboard() {
         if (m.sender === me.player_id) return;  // chat ke diri sendiri: sudah tampil saat dikirim
         const key = isRoom(m.to) ? m.to : m.sender;
         if (isRoom(key) && !roomOf(key)) loadRooms();
-        if (st.cur === key && !$("#room").hidden) addMsg(m);
+        if (st.cur === key && !$("#room").hidden) { addMsg(m); if (X.markRead) X.markRead(key); }
         else { st.last[key] = m.body; st.lastT[key] = m.t; st.unread[key] = (st.unread[key] || 0) + 1; }
         render();
       });
       if (!r.events.length && Date.now() - started < 1500) wait = 1200;  // server lama tanpa long-poll: jangan membanjiri
       const now = Date.now();
-      if (now - t1 > 60000) { t1 = now; loadStories(); loadContacts(); loadChats(); }
+      if (now - t1 > 60000) { t1 = now; loadStories(); loadContacts(); loadChats(); if (X.loadUnread) X.loadUnread(); }
       if (now - t2 > 15000) { t2 = now; loadPresence(); }
     } catch (e) { wait = 2500; }
     setTimeout(tick, wait);

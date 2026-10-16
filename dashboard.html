@@ -60,7 +60,7 @@
     <div class="ann" aria-label="Pengumuman"><span class="ab"><svg class="ic"><use href="#i-channel"/></svg></span><div class="clip"><div class="track"><span id="annt"></span><span id="annt2" aria-hidden="true"></span></div></div></div>
     <div id="stories" class="stories"></div>
     <div id="chips" class="chips" role="tablist" aria-label="Filter chat">
-      <button data-f="all" class="on"><svg class="ic"><use href="#i-chat"/></svg>Semua</button><button data-f="dm"><svg class="ic"><use href="#i-user"/></svg>Pribadi</button><button data-f="group"><svg class="ic"><use href="#i-users"/></svg>Grup</button><button data-f="channel"><svg class="ic"><use href="#i-channel"/></svg>Channel</button>
+      <button data-f="all" class="on"><svg class="ic"><use href="#i-chat"/></svg>Semua</button><button data-f="unread"><svg class="ic"><use href="#i-in"/></svg>Belum dibaca<i class="cn" hidden></i></button><button data-f="fav"><svg class="ic"><use href="#i-star"/></svg>Favorit<i class="cn" hidden></i></button><button data-f="group"><svg class="ic"><use href="#i-users"/></svg>Grup<i class="cn" hidden></i></button>
     </div>
     <ul id="list" class="list"></ul>
     <p id="empty-list" class="hint">Belum ada chat. Tap + lalu masukkan ID temanmu untuk menyimpannya.</p>
@@ -144,8 +144,8 @@
 <button id="fabt" class="fab t" aria-label="Status teks" title="Status teks" hidden><svg class="ic"><use href="#i-type"/></svg></button>
 <button id="fab" class="fab" aria-label="Tambah"><svg class="ic"><use href="#i-plus"/></svg></button>
 <nav class="nav">
-  <button data-s="home" class="on"><svg class="ic"><use href="#i-chat"/></svg><span>Chat</span></button>
-  <button data-s="upd"><svg class="ic"><use href="#i-news"/></svg><span>Pembaruan</span></button>
+  <button data-s="home" class="on"><span class="nic"><svg class="ic"><use href="#i-chat"/></svg><i id="nbchat" class="nb" hidden></i></span><span>Chat</span></button>
+  <button data-s="upd"><span class="nic"><svg class="ic"><use href="#i-news"/></svg><i id="nbupd" class="nb dot" hidden></i></span><span>Pembaruan</span></button>
   <button data-s="calls"><svg class="ic"><use href="#i-phone"/></svg><span>Panggilan</span></button>
   <button data-s="profile"><svg class="ic"><use href="#i-user"/></svg><span>Profil</span></button>
 </nav>

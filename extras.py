@@ -14,7 +14,7 @@ Semua tabel BARU, jadi database Neon yang sudah ada tidak perlu migrasi (dibuat 
 import re, secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, func, or_
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, func, or_, and_
 from database import Base, Message, Room, RoomMember, User
 
 VERIFY_AT = 1000           # jumlah pengikut untuk centang biru otomatis
@@ -95,6 +95,14 @@ class QReply(Base):
     author = Column(String(12), nullable=False, index=True)   # admin saluran atau penjawab aslinya
     text = Column(String(300), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class ChatRead(Base):
+    __tablename__ = "chat_reads"
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)
+    peer = Column(String(12), nullable=False, index=True)    # ID lawan bicara atau "R-<id>"
+    last_id = Column(Integer, nullable=False, default=0)     # pesan dengan id <= ini sudah dibaca
 
 
 class RoomInvite(Base):
@@ -206,6 +214,7 @@ def on_msg_delete(db, m):
 
 def on_room_purge(db, rid):
     tag = "R-%d" % rid
+    db.query(ChatRead).filter(ChatRead.peer == tag).delete(synchronize_session=False)
     drop_polls(db, Poll.chat == tag)
     drop_questions(db, Question.chat == tag)
     mids = [i for (i,) in db.query(Message.id).filter(Message.to_id == tag)]
@@ -217,6 +226,7 @@ def on_room_purge(db, rid):
 
 
 def on_user_purge(db, pid):
+    db.query(ChatRead).filter(or_(ChatRead.owner == pid, ChatRead.peer == pid)).delete(synchronize_session=False)
     drop_polls(db, or_(Poll.owner == pid, Poll.chat == pid))
     drop_questions(db, or_(Question.owner == pid, Question.chat == pid))
     db.query(PollVote).filter(PollVote.voter == pid).delete(synchronize_session=False)
@@ -517,6 +527,52 @@ def register(app, authed, owner_only, Session, official="NOVA"):
             db.add(StarMsg(owner=u.player_id, msg_id=m.id))
         elif not d.get("value") and s:
             db.delete(s)
+        db.commit()
+        return jsonify(ok=True)
+
+    # ---------- belum dibaca (disimpan di server, tahan muat ulang) ----------
+    @app.get("/api/unread")
+    @authed
+    def unread_get(db, u):
+        me = u.player_id
+        mine = [i for (i,) in db.query(RoomMember.room_id).filter_by(player_id=me)]
+        # saluran milik sendiri tidak punya "belum dibaca": semua pesannya ditulis oleh admin itu sendiri
+        tags = ["R-%d" % r.id for r in db.query(Room).filter(Room.id.in_(mine))] if mine else []
+        own = {"R-%d" % r.id for r in db.query(Room).filter(Room.id.in_(mine), Room.kind == "channel", Room.owner == me)} if mine else set()
+        tags = [t for t in tags if t not in own]
+        if not db.query(ChatRead.id).filter_by(owner=me).first():
+            # pertama kali: riwayat yang sudah ada dianggap terbaca, supaya angkanya tidak meledak
+            for peer, mx in db.query(Message.sender, func.max(Message.id)).filter(Message.to_id == me, Message.sender != me, Message.kind == "text").group_by(Message.sender):
+                db.add(ChatRead(owner=me, peer=peer, last_id=mx))
+            if tags:
+                for peer, mx in db.query(Message.to_id, func.max(Message.id)).filter(Message.to_id.in_(tags), Message.kind == "text").group_by(Message.to_id):
+                    db.add(ChatRead(owner=me, peer=peer, last_id=mx))
+            db.add(ChatRead(owner=me, peer=me, last_id=0))  # penanda "sudah diinisialisasi"
+            db.commit()
+            return jsonify(unread={})
+        out = {}
+        dm = db.query(Message.sender, func.count(Message.id)).outerjoin(ChatRead, and_(ChatRead.owner == me, ChatRead.peer == Message.sender)) \
+            .filter(Message.to_id == me, Message.sender != me, Message.kind == "text", Message.id > func.coalesce(ChatRead.last_id, 0)).group_by(Message.sender)
+        out.update({k: n for k, n in dm})
+        if tags:
+            rm = db.query(Message.to_id, func.count(Message.id)).outerjoin(ChatRead, and_(ChatRead.owner == me, ChatRead.peer == Message.to_id)) \
+                .filter(Message.to_id.in_(tags), Message.sender != me, Message.kind == "text", Message.id > func.coalesce(ChatRead.last_id, 0)).group_by(Message.to_id)
+            out.update({k: n for k, n in rm})
+        return jsonify(unread=out)
+
+    @app.post("/api/read")
+    @authed
+    def read_post(db, u):
+        me, peer = u.player_id, str((request.get_json(silent=True) or {}).get("peer") or "")
+        if not can_chat(db, me, peer):
+            return jsonify(ok=True)
+        q = db.query(func.max(Message.id)).filter(Message.kind == "text")
+        mx = (q.filter(Message.to_id == peer) if peer.startswith("R-") else q.filter(Message.to_id == me, Message.sender == peer)).scalar() or 0
+        r = db.query(ChatRead).filter_by(owner=me, peer=peer).first()
+        if r:
+            r.last_id = max(r.last_id or 0, mx)
+        else:
+            db.add(ChatRead(owner=me, peer=peer, last_id=mx))
         db.commit()
         return jsonify(ok=True)
 

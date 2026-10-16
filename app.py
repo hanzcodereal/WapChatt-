@@ -693,7 +693,8 @@ def stories_get(db, u):
     ids = [u.player_id] + [c.contact_pid for c in db.query(Contact).filter_by(owner=u.player_id)]
     cut = datetime.utcnow() - timedelta(hours=24)
     rows = db.query(Story).filter(Story.owner.in_(ids), Story.created_at > cut).order_by(Story.id).all()
-    return jsonify(stories=[{"id": s.id, "owner": s.owner, "kind": s.kind, "body": s.body,
+    seen = {v for (v,) in db.query(StoryView.story_id).filter(StoryView.viewer == u.player_id, StoryView.story_id.in_([s.id for s in rows]))} if rows else set()
+    return jsonify(stories=[{"id": s.id, "owner": s.owner, "kind": s.kind, "body": s.body, "seen": s.id in seen or s.owner == u.player_id,
                              "t": s.created_at.isoformat() + "Z"} for s in rows])
 
 
