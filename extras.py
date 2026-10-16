@@ -2,7 +2,7 @@
 
 - Sematkan pesan       : tabel pinned_msgs (24 jam / 7 hari / 30 hari / tanpa batas)
 - Polling              : tabel polls, poll_options, poll_votes (grup, chat pribadi, saluran; di saluran suara anonim)
-- Pertanyaan saluran   : tabel questions, q_answers (jawaban anonim, penulisnya tidak pernah dikirim ke siapa pun)
+- Pertanyaan saluran   : tabel questions, q_answers (admin tidak bisa menjawab; hanya admin yang melihat nama + ID penjawab, pengikut lain tidak)
 - Teruskan pesan       : POST /api/forward
 - Link grup            : tabel room_invites (kode undangan acak per grup; link saluran dan profil tidak butuh tabel)
 - Bintangi pesan       : tabel star_msgs (pribadi, hanya terlihat pemilik)
@@ -294,9 +294,16 @@ def register(app, authed, owner_only, Session, official="NOVA"):
     def q_dict(db, me, q):
         rows = db.query(QAnswer).filter_by(q_id=q.id).order_by(QAnswer.id.desc()).limit(200).all()
         n = db.query(func.count(QAnswer.id)).filter_by(q_id=q.id).scalar() or 0
-        # penulis sengaja TIDAK disertakan; "mine" hanya true untuk jawaban milik peminta sendiri
-        return {"id": q.id, "question": q.question, "count": n, "is_owner": q.owner == me,
-                "answers": [{"id": a.id, "text": a.text, "t": iso(a.created_at), "mine": a.author == me} for a in rows]}
+        # nama + ID penjawab HANYA dikirim ke admin (pemilik) saluran; pengikut lain tidak pernah menerimanya
+        is_owner = q.owner == me
+        who = {x.player_id: x.full_name for x in db.query(User).filter(User.player_id.in_([a.author for a in rows]))} if is_owner and rows else {}
+        out = []
+        for a in rows:
+            o = {"id": a.id, "text": a.text, "t": iso(a.created_at), "mine": a.author == me}
+            if is_owner:
+                o["by"], o["name"] = a.author, who.get(a.author, a.author)
+            out.append(o)
+        return {"id": q.id, "question": q.question, "count": n, "is_owner": is_owner, "answers": out}
 
     @app.post("/api/questions")
     @authed
@@ -330,6 +337,8 @@ def register(app, authed, owner_only, Session, official="NOVA"):
         text = str((request.get_json(silent=True) or {}).get("text") or "").strip()[:500]
         if not q or not text:
             return jsonify(error="Jawaban tidak boleh kosong."), 400
+        if q.owner == u.player_id:
+            return jsonify(error="Admin saluran tidak bisa menjawab pertanyaannya sendiri."), 403
         a = db.query(QAnswer).filter_by(q_id=qid, author=u.player_id).first()  # satu jawaban per orang; menjawab lagi = mengganti
         if a:
             a.text = text

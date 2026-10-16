@@ -61,23 +61,25 @@ window.WCX = function (c) {
   }
   function renderQna(w, q) {
     const body = w.querySelector(".pbody"), mine = q.answers.find((a) => a.mine);
-    body.replaceChildren(mk("small", q.count + " jawaban · jawaban anonim, tanpa nama atau ID"));
+    body.replaceChildren(mk("small", q.count + " jawaban"));
     const row = mk("div", null, "qbtns"), ans = mk("button", mine ? "Ubah jawabanku" : "Jawab", "btn"), see = mk("button", "Lihat jawaban (" + q.count + ")", "btn ghost");
     ans.type = see.type = "button";
     ans.onclick = async () => {
-      const x = await dialog({ title: "Jawab pertanyaan", desc: "Jawabanmu anonim. Tidak ada nama atau ID yang tampil ke siapa pun, termasuk admin saluran.", fields: [{ name: "t", label: "Jawabanmu", multiline: true, max: 500, value: mine ? mine.text : "", required: true }], ok: "Kirim" });
+      const x = await dialog({ title: "Jawab pertanyaan", fields: [{ name: "t", label: "Jawabanmu", multiline: true, max: 500, value: mine ? mine.text : "", required: true }], ok: "Kirim" });
       if (!x) return;
-      try { renderQna(w, (await api("/questions/" + q.id + "/answer", { method: "POST", body: JSON.stringify({ text: x.t }) })).q); toast("Jawaban terkirim secara anonim"); } catch (e) { toast(e.message); }
+      try { renderQna(w, (await api("/questions/" + q.id + "/answer", { method: "POST", body: JSON.stringify({ text: x.t }) })).q); toast("Jawaban terkirim"); } catch (e) { toast(e.message); }
     };
     see.onclick = () => showAnswers(w, q);
-    row.append(ans, see); body.append(row);
+    if (!q.is_owner) row.append(ans);  // admin saluran tidak bisa menjawab
+    row.append(see); body.append(row);
   }
   function showAnswers(w, q) {
     c.sheet("Jawaban (" + q.count + ")", (box) => {
       if (!q.answers.length) box.append(mk("p", "Belum ada jawaban.", "dlg-d"));
       const ul = mk("ul", null, "list");
       q.answers.forEach((a) => {
-        const li = c.row(null, a.mine ? "Anonim (jawabanmu)" : "Anonim", a.text, () => {}, { time: c.short(a.t) });
+        const li = q.is_owner ? c.row(null, a.name, "ID " + a.by + " · " + a.text, () => {}, { time: c.short(a.t) })
+          : c.row(null, a.mine ? "Anonim (jawabanmu)" : "Anonim", a.text, () => {}, { time: c.short(a.t) });
         if (a.mine || q.is_owner) {
           const x = mk("button", "Hapus", "pinx"); x.type = "button";
           x.onclick = async (ev) => { ev.stopPropagation(); try { await api("/answers/" + a.id, { method: "DELETE" }); li.remove(); loadQna(w); } catch (e) { toast(e.message); } };
@@ -131,12 +133,12 @@ window.WCX = function (c) {
   $("#attach").onclick = async () => {
     const to = st.cur; if (!to) return;
     const r = c.roomOf(to), acts = [{ key: "poll", label: "Polling" }];
-    if (r && r.kind === "channel" && r.owner === c.me().player_id) acts.push({ key: "qna", label: "Pertanyaan (dijawab anonim oleh pengikut)" });
+    if (r && r.kind === "channel" && r.owner === c.me().player_id) acts.push({ key: "qna", label: "Pertanyaan" });
     const x = await dialog({ title: "Buat", ok: null, actions: acts }); if (!x) return;
     try {
       if (x.action === "poll") { const p = await pollDialog(); if (p) posted(await api("/polls", { method: "POST", body: JSON.stringify({ to, ...p }) })); }
       else {
-        const q = await dialog({ title: "Pertanyaan untuk pengikut", desc: "Pengikut menjawab secara anonim. Kamu pun hanya melihat isi jawaban, tanpa nama atau ID.", fields: [{ name: "q", label: "Pertanyaan", multiline: true, max: 300, required: true }], ok: "Kirim" });
+        const q = await dialog({ title: "Pertanyaan untuk pengikut", fields: [{ name: "q", label: "Pertanyaan", multiline: true, max: 300, required: true }], ok: "Kirim" });
         if (q) posted(await api("/questions", { method: "POST", body: JSON.stringify({ to, question: q.q }) }));
       }
     } catch (err) { toast(err.message); }
