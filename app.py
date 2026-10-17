@@ -24,7 +24,7 @@ OWNER_IDS = {x.strip().upper() for x in os.getenv("OWNER_IDS", "").split(",") if
 ONLINE_SEC = 25
 VERIFIED = {x.strip().upper() for x in os.getenv("VERIFIED_IDS", "").split(",") if x.strip()}  # ID yang dapat centang biru
 ANNOUNCE = os.getenv("ANNOUNCEMENT", "Selamat datang di WapChatt. Simpan ID temanmu lalu mulai chat, telpon, atau video call.")
-PUBLIC_FILES = {"index.html", "login.html", "dashboard.html", "style.css", "script.js", "logo.png", "login.mp4", "intro.mp4", "extras.js", "manifest.json", "sw.js", "icon-192.png", "icon-512.png"}
+PUBLIC_FILES = {"index.html", "login.html", "dashboard.html", "style.css", "script.js", "logo.png", "login.mp4", "intro.mp4", "extras.js"}
 
 
 def new_pid(db):
@@ -951,11 +951,7 @@ def home():
 @app.get("/<path:f>")
 def static_files(f):
     if f in PUBLIC_FILES:
-        r = send_from_directory(BASE, f)
-        if f == "sw.js":  # service worker harus selalu terbaru
-            r.headers["Cache-Control"] = "no-cache"
-            r.headers["Service-Worker-Allowed"] = "/"
-        return r
+        return send_from_directory(BASE, f)
     return "Not found", 404
 
 

@@ -582,8 +582,11 @@ window.WCX = function (c) {
       p.prompt(); const r = await p.userChoice.catch(() => ({})); window.__wcInstall = null; updInst();
       return r.outcome === "accepted" ? toast("Memasang aplikasi...") : undefined;
     }
-    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    dialog({ title: "Pasang aplikasi", desc: ios ? "Buka lewat Safari, ketuk tombol Bagikan, lalu pilih Tambah ke Layar Utama." : "Browser belum menyediakan tombol pasang otomatis. Buka menu browser (titik tiga), lalu pilih Instal aplikasi atau Tambahkan ke layar utama.", ok: null });
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), issues = [];  // cari tahu kenapa browser belum menawarkan pemasangan
+    try { const r = await fetch("/manifest.json", { cache: "no-store" }); if (!r.ok) issues.push("manifest tidak ditemukan (status " + r.status + ")"); else { const m = await r.json(); const ic = await fetch(m.icons[0].src, { cache: "no-store" }); if (!ic.ok) issues.push("ikon tidak ditemukan (status " + ic.status + ")"); } } catch { issues.push("manifest tidak bisa dimuat"); }
+    try { if (!(await navigator.serviceWorker.getRegistration())) issues.push("service worker belum aktif, muat ulang halaman lalu coba lagi"); } catch { issues.push("service worker tidak didukung"); }
+    dialog({ title: "Pasang aplikasi", desc: ios ? "Buka lewat Safari, ketuk tombol Bagikan, lalu pilih Tambah ke Layar Utama."
+      : issues.length ? "Belum bisa dipasang: " + issues.join("; ") + "." : "Semua syarat sudah terpenuhi, tapi browser belum menawarkan tombol pasang. Muat ulang halaman, tunggu beberapa detik, lalu ketuk lagi. Kalau tetap belum, buka menu browser (titik tiga) lalu pilih Instal aplikasi.", ok: null });
   };
   updInst(); setTimeout(updInst, 3000);
   if ("serviceWorker" in navigator) {
@@ -623,7 +626,7 @@ window.WCX = function (c) {
   };
   if (notOn()) pushSub(true); else updNot();
   async function showNotif(title, o) {
-    try { (await navigator.serviceWorker.ready).showNotification(title, Object.assign({ icon: "icon-192.png", badge: "icon-192.png", renotify: true }, o)); }
+    try { (await navigator.serviceWorker.ready).showNotification(title, Object.assign({ icon: "/logo.png", badge: "/logo.png", renotify: true }, o)); }
     catch { try { new Notification(title, o); } catch {} }
   }
   function notify(m, key) {  // pesan masuk saat aplikasi di latar belakang

@@ -389,10 +389,60 @@ def on_user_purge(db, pid):
     db.query(PinnedMsg).filter(PinnedMsg.by == pid).delete(synchronize_session=False)
 
 
+PWA_MANIFEST = {
+    "id": "/dashboard.html", "name": "WapChatt", "short_name": "WapChatt", "description": "Chat, status, saluran, dan panggilan.",
+    "start_url": "/dashboard.html", "scope": "/", "display": "standalone", "orientation": "portrait", "lang": "id",
+    "background_color": "#FFD600", "theme_color": "#FFD600", "prefer_related_applications": False,
+    "icons": [{"src": "/logo.png", "sizes": "192x192 512x512", "type": "image/png", "purpose": "any"}],
+}
+
+# Service worker dibuat dari kode (tanpa file tambahan): syarat pemasangan aplikasi + penerima notifikasi.
+SW_JS = r"""
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", (e) => {
+  if (e.request.mode === "navigate") e.respondWith(fetch(e.request).catch(() => new Response("Tidak ada koneksi internet.", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } })));
+});
+self.addEventListener("push", (e) => {
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (x) { d = { title: "WapChatt", body: e.data && e.data.text() }; }
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (wins.some((w) => w.visibilityState === "visible")) return;
+    await self.registration.showNotification(d.title || "WapChatt", {
+      body: d.body || "", tag: d.tag || "wapchatt", renotify: true, icon: "/logo.png", badge: "/logo.png",
+      vibrate: d.call ? [300, 150, 300, 150, 300] : [120], requireInteraction: !!d.call, data: { peer: d.peer || "" },
+    });
+  })());
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const peer = (e.notification.data || {}).peer || "";
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (wins.length) { await wins[0].focus(); wins[0].postMessage({ open: peer }); return; }
+    await self.clients.openWindow("/dashboard.html" + (peer ? "?o=" + encodeURIComponent(peer) : ""));
+  })());
+});
+"""
+
+
 def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
     global OFFICIAL
     OFFICIAL = official
     H = helpers or {}
+
+    @app.get("/manifest.json")
+    def pwa_manifest():
+        r = app.response_class(json.dumps(PWA_MANIFEST), mimetype="application/manifest+json")
+        r.headers["Cache-Control"] = "public, max-age=600"
+        return r
+
+    @app.get("/sw.js")
+    def pwa_sw():
+        r = app.response_class(SW_JS, mimetype="text/javascript")
+        r.headers["Cache-Control"] = "no-cache"
+        r.headers["Service-Worker-Allowed"] = "/"
+        return r
 
     # ---------- polling ----------
     def poll_dict(db, me, p):
