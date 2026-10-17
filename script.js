@@ -60,7 +60,7 @@ async function initDashboard() {
   if (!getToken()) return logout();
   let me;
   try { me = (await api("/me")).user; } catch { return logout(); }
-  const st = { contacts: [], rooms: [], stories: [], calls: [], cur: null, unread: {}, last: {}, lastT: {}, seen: {}, filter: "all", tab: "home", byId: {}, reply: null, mem: {}, memTry: {} };
+  const st = { contacts: [], rooms: [], stories: [], calls: [], cur: null, unread: {}, last: {}, lastT: {}, seen: {}, filter: "all", tab: "home", byId: {}, reply: null, mem: {}, memTry: {}, memList: [], cs: {}, blocked: new Set() };
   const mk = (tag, txt, cls) => { const e = document.createElement(tag); if (txt != null) e.textContent = txt; if (cls) e.className = cls; return e; };
   const hue = (n) => [...n].reduce((a, c) => a + c.charCodeAt(0), 0) * 37 % 360;
   const av = (n, img) => { const e = mk("div", img ? "" : (n[0] || "?").toUpperCase(), "av"); e.style.background = img ? "url(" + img + ") center/cover" : "hsl(" + hue(n) + ",85%,78%)"; return e; };
@@ -80,7 +80,8 @@ async function initDashboard() {
     if ((m = STR.exec(b || ""))) return { id: 0, text: m[2], st: m[1] };
     return { id: 0, text: b || "" };
   };
-  const lastText = (b) => (X.preview && X.preview(b)) || (stkId(b) ? "Stiker" : parseRe(b).text);
+  const plain = (t) => t.replace(/@\[([^|\]]+)\|([^\]]*)\]/g, "@$2");  // @[ID|Nama] -> @Nama
+  const lastText = (b) => (X.preview && X.preview(b)) || (stkId(b) ? "Stiker" : plain(parseRe(b).text));
   const sha24 = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].slice(0, 12).map((x) => x.toString(16).padStart(2, "0")).join("");
   /* Kotak dialog bergaya WapChatt, pengganti prompt() bawaan browser. Hasil: objek isian, atau null kalau dibatalkan. */
   function dialog({ title, desc, fields = [], contacts = null, contactsLabel = "", ok = "Simpan", actions = [] }) {
@@ -217,7 +218,7 @@ async function initDashboard() {
     }));
     const E = st.contacts.map((c) => ({ p: c.player_id, n: c.full_name, i: c.avatar, k: "dm", v: c.verified, tag: c.owner ? "OWNER" : "" }));
     st.rooms.filter((r) => r.kind === "group").forEach((r) => E.push({ p: "R-" + r.id, n: r.name, k: r.kind, i: r.avatar, v: !!r.verified }));
-    E.push({ p: me.player_id, n: "Catatan saya", i: me.avatar, k: "dm", tag: "KAMU" });
+    E.push({ p: me.player_id, n: me.player_id + " (Anda)", i: me.avatar, k: "dm", sub: "Kirim pesan ke diri sendiri" });
     Object.keys(st.last).forEach((k) => { if (!isRoom(k) && !saved(k) && k !== me.player_id) E.push({ p: k, n: nameOf(k), i: imgOf(k), k: "dm", v: k === OFFICIAL, tag: k === OFFICIAL ? "RESMI" : "" }); });
     const flt = { all: () => true, unread: (e) => (st.unread[e.p] || 0) > 0, fav: (e) => isPinned(e.p), group: (e) => e.k === "group" };
     document.querySelectorAll("#chips button").forEach((b) => {  // jumlah di Belum dibaca, Favorit, Grup
@@ -228,7 +229,7 @@ async function initDashboard() {
       .sort((a, b) => (isPinned(b.p) - isPinned(a.p)) || ((Date.parse(st.lastT[b.p]) || 0) - (Date.parse(st.lastT[a.p]) || 0)));
     $("#empty-list").hidden = F.length > 0;
     $("#empty-list").textContent = E.length ? "Tidak ada chat yang cocok." : "Belum ada chat. Tap + lalu masukkan ID temanmu untuk menyimpannya.";
-    $("#list").replaceChildren(...F.map((e) => row(e.i, e.n, lastText(st.last[e.p]) || (e.k === "dm" ? e.p : e.k === "group" ? "Grup" : "Saluran"), () => open(e.p),
+    $("#list").replaceChildren(...F.map((e) => row(e.i, e.n, e.sub || lastText(st.last[e.p]) || (e.k === "dm" ? e.p : e.k === "group" ? "Grup" : "Saluran"), () => open(e.p),
       { time: st.lastT[e.p] ? short(st.lastT[e.p]) : "", badge: st.unread[e.p] || "", verified: e.v, tag: e.tag, avEl: e.k === "dm" || e.i ? null : chAv(e.k), online: e.k === "dm" && !!(st.seen[e.p] && st.seen[e.p].online) })));
     [...$("#list").children].forEach((li, i) => { if (F[i] && isPinned(F[i].p)) { li.classList.add("pinned"); li.append(mk("small", "Disematkan", "pinmark")); } });
 
@@ -239,7 +240,7 @@ async function initDashboard() {
     };
     const chatUnread = Object.entries(st.unread).reduce((s, [k, v]) => s + (v > 0 && !(isRoom(k) && (roomOf(k) || {}).kind === "channel") ? v : 0), 0);
     setNb("#nbchat", chatUnread, true, "Chat");
-    setNb("#nbupd", st.stories.some((s) => s.owner !== me.player_id && !s.seen) || st.rooms.some((r) => r.kind === "channel" && r.joined && r.owner !== me.player_id && (st.unread["R-" + r.id] || 0) > 0) ? 1 : 0, false, "Pembaruan");
+    setNb("#nbupd", st.stories.some((s) => s.owner !== me.player_id && !s.seen) || st.rooms.some((r) => r.kind === "channel" && r.joined && !r.is_admin && (st.unread["R-" + r.id] || 0) > 0) ? 1 : 0, false, "Pembaruan");
 
     /* Pembaruan: kartu status */
     const card = (o, label, onclick) => {
@@ -257,7 +258,7 @@ async function initDashboard() {
     /* Saluran */
     const chs = st.rooms.filter((r) => r.kind === "channel");
     const chRow = (r) => row(r.avatar || null, r.name, (r.joined && st.last["R-" + r.id] ? lastText(st.last["R-" + r.id]) : r.count + " pengikut" + (r.about ? " · " + r.about : "")), () => (r.joined ? open("R-" + r.id) : joinCh(r.id)),
-      { time: r.joined && st.lastT["R-" + r.id] ? short(st.lastT["R-" + r.id]) : "", verified: r.verified, avEl: r.avatar ? null : chAv("channel"), tag: r.owner === me.player_id ? "ADMIN" : "", badge: r.joined && r.owner !== me.player_id ? st.unread["R-" + r.id] || "" : "", icon: r.joined ? null : ic("plus", "pbtn") });
+      { time: r.joined && st.lastT["R-" + r.id] ? short(st.lastT["R-" + r.id]) : "", verified: r.verified, avEl: r.avatar ? null : chAv("channel"), tag: r.is_admin ? "ADMIN" : "", badge: r.joined && !r.is_admin ? st.unread["R-" + r.id] || "" : "", icon: r.joined ? null : ic("plus", "pbtn") });
     const mineCh = chs.filter((r) => r.joined).sort((a, b) => (Date.parse(st.lastT["R-" + b.id]) || 0) - (Date.parse(st.lastT["R-" + a.id]) || 0)), finds = chs.filter((r) => !r.joined);
     $("#mych").replaceChildren(...mineCh.map(chRow));
     $("#find-h").hidden = !finds.length;
@@ -267,7 +268,8 @@ async function initDashboard() {
     $("#empty-x").hidden = X.length > 0;
 
     const ST = { answered: "Terjawab", missed: "Tidak terjawab", rejected: "Ditolak" };
-    $("#calllist").replaceChildren(...st.calls.map((c) => row(imgOf(c.peer), nameOf(c.peer), (c.out ? "Keluar" : "Masuk") + " · " + (c.video ? "Video" : "Suara") + " · " + ST[c.status], () => open(c.peer), { time: short(c.t), icon: ic(c.video ? "video" : "phone", c.status !== "answered" && !c.out ? "miss" : "") })));
+    const dur = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60, p = (n) => String(n).padStart(2, "0"); return h ? h + ":" + p(m) + ":" + p(x) : p(m) + ":" + p(x); };  // lama panggilan
+    $("#calllist").replaceChildren(...st.calls.map((c) => row(imgOf(c.peer), nameOf(c.peer), (c.out ? "Keluar" : "Masuk") + " · " + (c.video ? "Video" : "Suara") + " · " + ST[c.status] + (c.status === "answered" && c.secs != null ? " · " + dur(c.secs) : ""), () => open(c.peer), { time: short(c.t), icon: ic(c.video ? "video" : "phone", c.status !== "answered" && !c.out ? "miss" : "") })));
     $("#empty-calls").hidden = st.calls.length > 0;
     $("#callclear").hidden = !st.calls.length;
     [...$("#calllist").children].forEach((li, i) => {
@@ -280,7 +282,7 @@ async function initDashboard() {
     $("#pname").textContent = me.full_name; $("#pstat").textContent = me.status || "Belum ada bio";
     $("#pid").textContent = me.player_id;
     $("#pcover").style.backgroundImage = me.cover ? 'url("' + me.cover + '")' : "";
-    $("#pver").toggleAttribute("hidden", !me.verified); $("#pown").hidden = !me.owner; $("#admbtn").hidden = !me.is_owner; $("#pvb").toggleAttribute("hidden", !me.verified); $("#copysub").textContent = me.player_id;
+    $("#pver").toggleAttribute("hidden", !me.verified); $("#pown").hidden = !me.owner; $("#admbtn").hidden = $("#owlab").hidden = !me.is_owner; $("#pvb").toggleAttribute("hidden", !me.verified); $("#copysub").textContent = me.player_id;
     $("#swpub").setAttribute("aria-checked", String(me.public !== false)); $("#swseen").setAttribute("aria-checked", String(me.show_seen !== false));
   }
   async function loadContacts() { st.contacts = (await api("/contacts")).contacts; render(); }
@@ -317,13 +319,20 @@ async function initDashboard() {
   $("#logout").onclick = logout;
   $("#copy").onclick = () => navigator.clipboard.writeText(me.player_id).then(() => ($("#copysub").textContent = "Tersalin"));
 
-  const tick = (m) => { if (m.pending) return ic("clock", "tk"); const seen = !isRoom(m.to) && st.seen[m.to] && Date.parse(st.seen[m.to].seen) >= Date.parse(m.t); return ic(seen ? "check2" : "check", "tk" + (seen ? " seen" : "")); };
+  const tick = (m) => {
+    if (m.pending) return ic("clock", "tk");
+    if (isRoom(m.to)) return ic("check", "tk");
+    const cs = st.cs[m.to] || {};
+    if (cs.blocked) return ic("check", "tk");                     // diblokir (oleh kontak atau owner): satu centang
+    const replied = !!m.id && (cs.last || 0) > m.id;              // sudah dibalas: dua centang biru
+    return ic("check2", "tk " + (replied ? "seen" : "dlv"));      // belum dibalas: dua centang putih
+  };
   function refreshTicks() {
-    document.querySelectorAll("#msgs .bub.out").forEach((d) => { const t = d.querySelector(".tk"); if (t) t.replaceWith(tick({ to: d.dataset.to, t: d.dataset.t })); });
+    document.querySelectorAll("#msgs .bub.out").forEach((d) => { const t = d.querySelector(".tk"); if (t) t.replaceWith(tick({ to: d.dataset.to, t: d.dataset.t, id: +d.dataset.mid || 0 })); });
   }
   function roomSub() {
     if (!st.cur || isRoom(st.cur)) return;
-    if (st.cur === me.player_id) { $("#rid").className = ""; $("#rid").textContent = "Pesan untuk dirimu sendiri"; return; }
+    if (st.cur === me.player_id) { $("#rid").className = ""; $("#rid").textContent = "Kirim pesan ke diri sendiri"; return; }
     if (st.cur === OFFICIAL) { $("#rid").className = ""; $("#rid").textContent = "Akun resmi · hanya pengumuman"; return; }
     const s = st.seen[st.cur], el = $("#rid");
     el.className = s && s.online ? "on" : "";
@@ -353,7 +362,7 @@ async function initDashboard() {
   }
   async function loadMem(r) {
     st.memBusy = true;
-    try { (await api("/rooms/" + r.id + "/members")).members.forEach((x) => (st.mem[x.player_id] = { full_name: x.full_name, avatar: x.avatar })); paintMem(); } catch {}
+    try { st.memList = (await api("/rooms/" + r.id + "/members")).members; st.memList.forEach((x) => (st.mem[x.player_id] = { full_name: x.full_name, avatar: x.avatar })); paintMem(); } catch {}
     st.memBusy = false;
   }
   const dayKey = (t) => { const d = new Date(t); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); };
@@ -383,7 +392,7 @@ async function initDashboard() {
       if (rp.fwd) box.append(mk("small", "Diteruskan", "fwdl"));
       if (rp.st != null) box.append(mk("small", "Membalas status" + (rp.st ? ": " + rp.st : ""), "stq"));
       if (rp.id) box.append(quote(rp.id));
-      box.append(mk("span", rp.text));
+      box.append(X.rich ? X.rich(rp.text, d) : mk("span", rp.text));
     }
     if (X.menuBtn) X.menuBtn(mt, d, m, mine, sid);  // Balas, bintang, sematkan, salin, hapus: semuanya di titik tiga
     mt.append(mk("time", tm(m.t)));
@@ -402,15 +411,16 @@ async function initDashboard() {
     if (X.opened) X.opened();
     if (X.markRead) X.markRead(p);
     const r = roomOf(p);
-    $("#rtitle").textContent = p === me.player_id ? "Catatan saya" : nameOf(p);
+    $("#rtitle").textContent = p === me.player_id ? me.player_id + " (Anda)" : nameOf(p);
     const ct = contact(p); if (ct && ct.owner) $("#rtitle").append(mk("i", "OWNER", "own")); if (p === OFFICIAL) $("#rtitle").append(mk("i", "RESMI", "own"));
     if (r && r.kind === "channel" && r.verified) $("#rtitle").append(ic("seal"));
     $("#rav").replaceChildren(av(nameOf(p), imgOf(p)));
-    $("#rid").className = ""; $("#rid").textContent = r ? (r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut") : p === me.player_id ? "Pesan untuk dirimu sendiri" : p;
+    $("#rid").className = ""; $("#rid").textContent = r ? (r.kind === "group" ? "Grup" : "Saluran · " + r.count + " pengikut") : p === me.player_id ? "Kirim pesan ke diri sendiri" : p;
     roomSub(); $("#tray").hidden = true;
     $("#vbtn").hidden = $("#abtn").hidden = !!r || p === OFFICIAL || p === me.player_id;
-    $("#form").hidden = (!!r && r.kind === "channel" && r.owner !== me.player_id) || p === OFFICIAL;
+    $("#form").hidden = (!!r && r.kind === "channel" && !r.is_admin) || p === OFFICIAL;
     st.byId = {}; st.day = ""; stopReply(); $("#msgs").replaceChildren(); show("room");
+    st.memList = [];
     const memP = r && r.kind === "group" ? loadMem(r) : null;
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
     if (memP) await memP;
@@ -419,7 +429,7 @@ async function initDashboard() {
   $("#back").onclick = () => { st.cur = null; show(st.tab); };
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
-    const t0 = $("#text").value.trim();
+    const t0 = X.encodeMentions ? X.encodeMentions($("#text").value.trim()) : $("#text").value.trim();
     if (!t0 || !st.cur) return;
     const v = st.reply ? "[re:" + st.reply + "]" + t0 : t0;
     $("#text").value = ""; upd(); stopReply();
@@ -793,7 +803,7 @@ async function initDashboard() {
     let u; try { u = (await api("/users/" + encodeURIComponent(pid))).user; } catch (e) { return toast(e.message); }
     const off = pid === OFFICIAL;
     sheet("Detail profil", (box, close) => {
-      const cv = mk("div", null, "pcover"); if (u.cover) cv.style.backgroundImage = 'url("' + u.cover + '")';
+      const cv = mk("div", null, "pcover"); if (u.cover) { cv.style.backgroundImage = 'url("' + u.cover + '")'; cv.style.cursor = "zoom-in"; cv.onclick = () => zoom(u.cover, "Banner"); }
       const top = mk("div", null, "ptop"), nm = mk("b", u.nick || u.full_name, "pname");
       if (u.verified) nm.append(ic("seal"));
       if (off) nm.append(mk("i", "RESMI", "own")); else if (u.owner) nm.append(mk("i", "OWNER", "own"));
@@ -807,6 +817,7 @@ async function initDashboard() {
         { const b = mk("button", "Salin link profil", "btn full ghost"); b.type = "button"; b.onclick = () => X.shareLink("u", pid); box.append(b); }
         if (!u.me && !u.saved) { const b = mk("button", "Simpan ID", "btn full ghost"); b.type = "button"; b.onclick = () => saveId(pid).then(close); box.append(b); }
         if (!u.me && st.cur !== pid) { const b = mk("button", "Kirim pesan", "btn full"); b.type = "button"; b.onclick = () => { close(); open(pid); }; box.append(b); }
+        if (!u.me && X.blockToggle) { const b = mk("button", st.blocked.has(pid) ? "Buka blokir" : "Blokir kontak", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); X.blockToggle(pid); }; box.append(b); }
         if (hasStory(pid)) { const b = mk("button", "Lihat status", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); viewStories(pid); }; box.append(b); }
         if (u.me) { const b = mk("button", "Ubah nama", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); renameMe(); }; box.append(b); }
         else { const b = mk("button", "Ubah nama kontak", "btn full ghost"); b.type = "button"; b.onclick = () => { close(); renameContact(pid, u.nick); }; box.append(b); }
@@ -843,13 +854,16 @@ async function initDashboard() {
     if (!r && !self && hasStory(p)) acts.push({ key: "story", label: "Lihat status" });
     if (r && (r.kind === "channel" || r.owner === me.player_id)) acts.push({ key: "link", label: r.kind === "group" ? "Link grup" : "Salin link saluran" });
     else if (!r && !off) acts.push({ key: "link", label: self ? "Salin link profilku" : "Salin link profil" });
+    acts.push({ key: "wp", label: "Wallpaper chat" });
+    if (!r && !self && p !== OFFICIAL) acts.push({ key: "block", label: st.blocked.has(p) ? "Buka blokir kontak" : "Blokir kontak" });
     acts.push({ key: "pins", label: "Pesan disematkan" }, { key: "stars", label: "Pesan berbintang" },
       { key: "pin", label: isPinned(p) ? "Lepas sematan chat" : "Sematkan chat" }, { key: "clear", label: "Hapus chat", danger: true });
-    const x = await dialog({ title: r ? r.name : self ? "Catatan saya" : nameOf(p), ok: null, actions: acts });
+    const x = await dialog({ title: r ? r.name : self ? me.player_id + " (Anda)" : nameOf(p), ok: null, actions: acts });
     if (!x) return;
     ({ info: () => showRoomInfo(r), members: () => showMembers(r), profile: () => showProfile(p), save: () => saveId(p),
       nick: () => renameContact(p, (contact(p) || {}).nick), vcall: () => call(true), acall: () => call(false),
       link: () => X.shareLink(r ? (r.kind === "group" ? "g" : "c") : "u", r || p),
+      wp: () => X.wallpaperFor(p), block: () => X.blockToggle(p),
       story: () => viewStories(p), pins: () => X.showPins(), stars: () => X.showStars(),
       pin: () => togglePin(p), clear: () => clearChat(p) })[x.action]();
   }
@@ -905,7 +919,8 @@ async function initDashboard() {
     let v; try { v = (await api("/rooms/" + r.id + "/members")).members; } catch (e) { return toast(e.message); }
     sheet((r.kind === "group" ? "Anggota grup" : "Pengikut saluran") + " (" + v.length + ")", (box, close) => {
       const ul = mk("ul", null, "list");
-      v.forEach((x) => ul.append(row(x.avatar, x.player_id === me.player_id ? "Kamu" : nameOf(x.player_id) === x.player_id ? x.full_name : nameOf(x.player_id), x.room_owner ? "Pemilik" : x.player_id, () => { close(); showProfile(x.player_id); }, { verified: x.verified, tag: x.room_owner ? "ADMIN" : "" })));
+      v.forEach((x) => ul.append(row(x.avatar, x.player_id === me.player_id ? "Kamu" : nameOf(x.player_id) === x.player_id ? x.full_name : nameOf(x.player_id), x.room_owner ? "Pemilik" : x.player_id,
+        () => { close(); if (X.memberMenu) X.memberMenu(r, x); else showProfile(x.player_id); }, { verified: x.verified, tag: x.admin ? "ADMIN" : "" })));
       box.append(ul);
     });
   }
@@ -987,11 +1002,12 @@ async function initDashboard() {
   /* ----- profil ----- */
   async function saveProfile(patch) { try { me = (await api("/profile", { method: "POST", body: JSON.stringify(patch) })).user; render(); } catch (e) { toast(e.message); } }
   $("#pphoto").onclick = async () => saveProfile({ avatar: await pick(320, 0.8, 140000) });
-  $("#pcov").onclick = async () => saveProfile({ cover: await pick(720, 0.6, 190000) });
+  $("#pcovbtn").onclick = async () => saveProfile({ cover: await pick(720, 0.6, 190000) });
+  $("#pcover").onclick = () => me.cover && zoom(me.cover, "Banner");                      // banner bisa diketuk untuk diperbesar
+  $("#pcover").onkeydown = (e) => e.key === "Enter" && $("#pcover").click();
   $("#swpub").onclick = () => saveProfile({ public: me.public === false });
   $("#swseen").onclick = () => saveProfile({ show_seen: me.show_seen === false });
-  $("#pedit").onclick = () => $("#pst").click();
-  $("#pavb").onclick = () => $("#pphoto").click();
+  $("#pavb").onclick = () => (me.avatar ? zoom(me.avatar, me.full_name) : toast("Belum ada foto profil"));  // foto profil bisa diketuk untuk diperbesar
   $("#pdel").onclick = () => saveProfile({ avatar: "" });
   $("#pnamebtn").onclick = () => renameMe();
   $("#ppwbtn").onclick = async () => {
@@ -1001,7 +1017,7 @@ async function initDashboard() {
     try { await api("/password", { method: "POST", body: JSON.stringify({ new: r.n }) }); toast("Password diganti"); } catch (e) { toast(e.message); }
   };
   $("#callclear").onclick = async () => { if (await dialog({ title: "Hapus log panggilan?", desc: "Semua riwayat panggilan dihapus dari akunmu saja.", ok: "Hapus semua" })) hideCalls(); };
-  $("#pst").onclick = async () => {
+  $("#pedit").onclick = async () => {
     const r = await dialog({ title: "Ubah bio", fields: [{ name: "s", label: "Bio kamu", value: me.status || "", max: 80, placeholder: "Ceritakan tentang dirimu" }], ok: "Simpan" });
     if (r) saveProfile({ status: r.s });
   };
@@ -1193,6 +1209,7 @@ async function initDashboard() {
       if (isExpected(from) && stream && !p) { expected.delete(from); return answer(from, data); }  // anggota panggilan: otomatis
       if (incoming || inCall()) return sigTo(from, "reject");
       incoming = { from, offer: data, pend: [] }; video = !!data.video; t0 = 0; learn(from);
+      if (X.notifyCall && (document.hidden || !document.hasFocus())) X.notifyCall(pname(from), from, video);
       const n = ((data.group || []).length) + 2;
       $("#iav").replaceChildren(av(pname(from), pimg(from))); $("#inwho").textContent = pname(from);
       $("#inkind").textContent = (n > 2 ? "Panggilan grup " : "Panggilan ") + (video ? "video" : "suara") + " masuk" + (n > 2 ? " (" + n + " orang)" : "");
@@ -1260,9 +1277,10 @@ async function initDashboard() {
   try { localStorage.removeItem("nova_lock"); } catch {}  // sisa kunci aplikasi lama
 
   /* ----- polling pesan + sinyal ----- */
-  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL }));
+  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL, showMembers, refreshTicks, pick, plain }));
   await Promise.all([loadContacts(), loadRooms(), loadStories(), loadChats(), loadPresence()]);
   if (X.loadUnread) await X.loadUnread();
+  if (X.loadBlocks) X.loadBlocks();
   show("home");
   if (X.consumeLink) X.consumeLink();
   /* ----- panel owner ----- */
@@ -1283,9 +1301,11 @@ async function initDashboard() {
   }
   async function userActions(x) {
     const r = await dialog({ title: x.full_name, desc: "ID " + x.player_id + (x.banned ? " · sedang diblokir" : ""), ok: null, actions: [
+      { key: "detail", label: "Lihat detail" },
       { key: "verify", label: x.verified ? "Cabut centang biru" : "Beri centang biru" },
       ...(x.owner ? [] : [{ key: "resetpw", label: "Reset password" }, { key: "block", label: x.banned ? "Buka blokir" : "Blokir akun" }, { key: "delete", label: "Hapus akun", danger: true }])] });
     if (!r) return;
+    if (r.action === "detail") return X.userDetail(x.player_id);
     try {
       if (r.action === "verify") await api("/admin/users/" + x.player_id + "/verify", { method: "POST", body: JSON.stringify({ value: !x.verified }) });
       else if (r.action === "resetpw") {
@@ -1342,6 +1362,8 @@ async function initDashboard() {
         if (m.kind === "sig") return signal(m.sender, JSON.parse(m.body));
         if (m.sender === me.player_id) return;  // chat ke diri sendiri: sudah tampil saat dikirim
         const key = isRoom(m.to) ? m.to : m.sender;
+        if (!isRoom(key)) { const cs = st.cs[key] || (st.cs[key] = { blocked: false, last: 0 }); cs.last = Math.max(cs.last || 0, m.id); if (st.cur === key) refreshTicks(); }  // dibalas: centang jadi biru
+        if (X.notify && (document.hidden || !document.hasFocus())) X.notify(m, key);
         if (isRoom(key) && !roomOf(key)) loadRooms();
         if (st.cur === key && !$("#room").hidden) { addMsg(m); if (X.markRead) X.markRead(key); }
         else { st.last[key] = m.body; st.lastT[key] = m.t; st.unread[key] = (st.unread[key] || 0) + 1; }
@@ -1387,7 +1409,7 @@ function initLanding() {
 
 /* Link berbagi: /?u=ID (profil), /?c=ID (saluran), /?g=KODE (grup). Disimpan dulu supaya tetap terbuka setelah login. */
 try {
-  const q = new URLSearchParams(location.search), k = ["u", "c", "g"].find((x) => q.get(x));
+  const q = new URLSearchParams(location.search), k = ["u", "c", "g", "o"].find((x) => q.get(x));
   if (k) { localStorage.setItem("wc_link", k + ":" + q.get(k)); history.replaceState(null, "", location.pathname); }
 } catch {}
 const page = document.body.dataset.page;

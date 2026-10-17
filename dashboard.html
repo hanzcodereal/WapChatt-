@@ -6,6 +6,9 @@
 <title>WapChatt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#FFD600">
+<link rel="apple-touch-icon" href="icon-192.png">
 </head>
 <body data-page="dashboard">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
@@ -41,6 +44,8 @@
 <symbol id="i-news" viewBox="0 0 24 24"><path d="M3 5c3-1 6-1 9 1v14c-3-2-6-2-9-1zM12 6c3-2 6-2 9-1v14c-3-1-6-1-9 1"/></symbol>
 <symbol id="i-chnew" viewBox="0 0 24 24"><path d="M3 10v4h3l7 4V6L6 10z"/><path d="M18 8v6M15 11h6"/></symbol>
 <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L14 3a3.3 3.3 0 0 1 4.7 4.7L9.2 17.2a1.7 1.7 0 0 1-2.4-2.4L15 6.6"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15zM10 21h4"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></symbol>
 <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 4v2H6v-2l4-4zM12 15v6"/></symbol>
 <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.5 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" fill="currentColor"/></symbol>
 </defs></svg>
@@ -81,28 +86,36 @@
   <section id="calls" hidden><div class="callbar"><button id="callclear" class="pill" hidden>Hapus semua log</button></div><ul id="calllist" class="list"></ul><p id="empty-calls" class="hint">Belum ada panggilan. Buka chat teman lalu tap ikon telepon atau video.</p></section>
   <section id="profile" hidden>
     <div class="pcard">
-      <div id="pcover" class="cover"><button id="pcov" class="cam" aria-label="Ganti sampul" title="Ganti sampul"><svg class="ic"><use href="#i-camera"/></svg></button></div>
+      <div id="pcover" class="cover" role="button" tabindex="0" aria-label="Perbesar banner"></div>
       <div class="pbody">
-        <div class="pav"><button id="pavb" class="avbtn" aria-label="Ganti foto profil"><span id="pav"></span></button>
+        <div class="pav"><button id="pavb" class="avbtn" aria-label="Perbesar foto profil"><span id="pav"></span></button>
           <svg id="pvb" class="vbc" viewBox="0 0 24 24" role="img" aria-label="Akun terverifikasi" hidden><circle cx="12" cy="12" r="12" fill="#2F9BFF"/><path d="M7 12.5l3.2 3.2 6.3-6.6" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <div class="nm"><b id="pname"></b><svg id="pver" class="ic seal" hidden><use href="#i-seal"/></svg><i id="pown" class="own" hidden>OWNER</i><button id="pst" class="pen" aria-label="Edit bio"><svg class="ic"><use href="#i-edit"/></svg></button></div>
+        <div class="nm"><b id="pname"></b><svg id="pver" class="ic seal" hidden><use href="#i-seal"/></svg><i id="pown" class="own" hidden>OWNER</i></div>
         <div id="pid" class="pid"></div>
         <p id="pstat" class="pstat"></p>
-        <button id="pedit" class="outline"><svg class="ic"><use href="#i-edit"/></svg>Edit Bio</button>
       </div>
     </div>
-    <div class="card2 sw"><svg class="ic lead"><use href="#i-globe"/></svg><span><b>Profil Publik</b><small>Siapa pun bisa melihat foto dan biomu</small></span><button id="swpub" class="swb" role="switch" aria-checked="true" aria-label="Profil publik"></button></div>
-    <p class="lab">PRIVASI</p>
-    <div class="card2 sw"><svg class="ic lead"><use href="#i-clock"/></svg><span><b>Tampilkan Terakhir Dilihat</b><small>Orang lain bisa lihat kapan kamu terakhir online</small></span><button id="swseen" class="swb" role="switch" aria-checked="true" aria-label="Terakhir dilihat"></button></div>
-    <button id="admbtn" class="card2 setr" hidden><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Panel Owner</b><small>Kelola pengguna, banner, dan pengumuman</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
-    <button id="linkbtn" class="card2 setr"><svg class="ic lead"><use href="#i-copy"/></svg><span><b>Link profilku</b><small>Salin link supaya orang bisa menyimpan ID-mu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
-    <button id="starbtn" class="card2 setr"><svg class="ic lead"><use href="#i-star"/></svg><span><b>Pesan berbintang</b><small>Pesan yang kamu beri bintang</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <p class="lab">AKUN</p>
+    <button id="pedit" class="card2 setr"><svg class="ic lead"><use href="#i-edit"/></svg><span><b>Edit bio</b><small>Ceritakan tentang dirimu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="pnamebtn" class="card2 setr"><svg class="ic lead"><use href="#i-edit"/></svg><span><b>Ubah nama</b><small>Nama yang dilihat orang lain</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
-    <button id="ppwbtn" class="card2 setr"><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Ubah password</b><small>Ganti password akunmu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="pphoto" class="card2 setr"><svg class="ic lead"><use href="#i-camera"/></svg><span><b>Ganti foto profil</b></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="pdel" class="card2 setr"><svg class="ic lead"><use href="#i-trash"/></svg><span><b>Hapus foto profil</b></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="pcovbtn" class="card2 setr"><svg class="ic lead"><use href="#i-camera"/></svg><span><b>Ganti banner</b><small>Gambar di bagian atas profilmu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="ppwbtn" class="card2 setr"><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Ubah password</b><small>Ganti password akunmu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="linkbtn" class="card2 setr"><svg class="ic lead"><use href="#i-copy"/></svg><span><b>Link profilku</b><small>Salin link supaya orang bisa menyimpan ID-mu</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="copy" class="card2 setr"><svg class="ic lead"><use href="#i-copy"/></svg><span><b>Salin ID</b><small id="copysub"></small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="starbtn" class="card2 setr"><svg class="ic lead"><use href="#i-star"/></svg><span><b>Pesan berbintang</b><small>Pesan yang kamu beri bintang</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <p class="lab">PRIVASI</p>
+    <div class="card2 sw"><svg class="ic lead"><use href="#i-globe"/></svg><span><b>Profil Publik</b><small>Siapa pun bisa melihat foto dan biomu</small></span><button id="swpub" class="swb" role="switch" aria-checked="true" aria-label="Profil publik"></button></div>
+    <div class="card2 sw"><svg class="ic lead"><use href="#i-clock"/></svg><span><b>Tampilkan Terakhir Dilihat</b><small>Orang lain bisa lihat kapan kamu terakhir online</small></span><button id="swseen" class="swb" role="switch" aria-checked="true" aria-label="Terakhir dilihat"></button></div>
+    <button id="blockbtn" class="card2 setr"><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Kontak diblokir</b><small>Lihat dan buka blokir kontak</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="lockbtn" class="card2 setr"><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Kunci aplikasi</b><small>PIN 4 atau 6 digit, atau sidik jari</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <p class="lab">TAMPILAN DAN APLIKASI</p>
+    <button id="wpbtn" class="card2 setr"><svg class="ic lead"><use href="#i-camera"/></svg><span><b>Wallpaper semua chat</b><small>Berlaku untuk chat dan saluran</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="notbtn" class="card2 setr"><svg class="ic lead"><use href="#i-bell"/></svg><span><b>Notifikasi</b><small>Pesan dan panggilan masuk</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <button id="instbtn" class="card2 setr"><svg class="ic lead"><use href="#i-download"/></svg><span><b>Pasang aplikasi</b><small>Unduh WapChatt ke layar utama</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
+    <p id="owlab" class="lab" hidden>OWNER</p>
+    <button id="admbtn" class="card2 setr" hidden><svg class="ic lead"><use href="#i-lock"/></svg><span><b>Panel Owner</b><small>Kelola pengguna, banner, dan pengumuman</small></span><svg class="ic"><use href="#i-chev"/></svg></button>
     <button id="logout" class="card2 setr out"><svg class="ic lead"><use href="#i-logout"/></svg><span><b>Logout</b></span></button>
   </section>
   <section id="admin" hidden>

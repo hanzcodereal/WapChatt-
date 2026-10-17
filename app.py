@@ -24,7 +24,7 @@ OWNER_IDS = {x.strip().upper() for x in os.getenv("OWNER_IDS", "").split(",") if
 ONLINE_SEC = 25
 VERIFIED = {x.strip().upper() for x in os.getenv("VERIFIED_IDS", "").split(",") if x.strip()}  # ID yang dapat centang biru
 ANNOUNCE = os.getenv("ANNOUNCEMENT", "Selamat datang di WapChatt. Simpan ID temanmu lalu mulai chat, telpon, atau video call.")
-PUBLIC_FILES = {"index.html", "login.html", "dashboard.html", "style.css", "script.js", "logo.png", "login.mp4", "intro.mp4", "extras.js"}
+PUBLIC_FILES = {"index.html", "login.html", "dashboard.html", "style.css", "script.js", "logo.png", "login.mp4", "intro.mp4", "extras.js", "manifest.json", "sw.js", "icon-192.png", "icon-512.png"}
 
 
 def new_pid(db):
@@ -182,6 +182,11 @@ def log_call(db, me_id, to, body):
         c = db.query(Call).filter_by(caller=to, callee=me_id, status="missed").order_by(Call.id.desc()).first()
         if c:
             c.status = "answered" if t == "answer" else "rejected"
+            if t == "answer":
+                db.flush()
+                extras.call_start(db, c.id)
+    elif t == "end":
+        extras.call_end(db, me_id, to)
 
 
 @app.post("/api/register")
@@ -291,16 +296,25 @@ def send(db, u):
     if kind == "text" and to.startswith("R-") and to[2:].isdigit():
         r = db.get(Room, int(to[2:]))
         ok = r and db.query(RoomMember.id).filter_by(room_id=r.id, player_id=u.player_id).first() \
-            and (r.kind == "group" or r.owner == u.player_id)  # saluran: hanya pemilik yang boleh posting
+            and (r.kind == "group" or extras.is_admin(db, r, u.player_id))  # saluran: pemilik dan admin yang boleh posting
     else:
         ok = db.query(User.id).filter_by(player_id=to).first()
     if not body or not ok:
         return jsonify(error="Pesan tidak valid."), 400
+    if not to.startswith("R-") and to != u.player_id and extras.is_blocked(db, u.player_id, to):
+        return jsonify(error="Kamu memblokir kontak ini. Buka blokir dulu untuk mengirim pesan atau menelepon."), 403
     if kind == "sig":
         log_call(db, u.player_id, to, body)
     m = Message(sender=u.player_id, to_id=to, kind=kind, body=body)
     db.add(m)
+    db.flush()
+    if not to.startswith("R-") and to != u.player_id and (extras.is_blocked(db, to, u.player_id) or to in _cache["banned"]):
+        db.add(extras.Undelivered(msg_id=m.id))  # diblokir: tersimpan untuk pengirim (satu centang) tapi tidak pernah sampai
     db.commit()
+    try:
+        extras.notify_send(db, m, u.full_name)
+    except Exception as e:
+        print("push gagal:", e)
     return jsonify(m.public())
 
 
@@ -535,6 +549,8 @@ def history(db, u):
                    (Message.sender == p) & (Message.to_id == me_id))
     cl = db.query(ChatClear).filter_by(owner=me_id, peer=p).first()
     q = db.query(Message).filter(Message.kind == "text", cond)
+    if not p.startswith("R-"):
+        q = q.filter(or_(Message.sender == me_id, ~Message.id.in_(extras.undelivered())))
     if cl:
         q = q.filter(Message.id > cl.upto)
     rows = q.order_by(Message.id.desc()).limit(200).all()
@@ -583,7 +599,7 @@ def poll(db, u):
     while True:
         tags = ["R-%d" % m.room_id for m in db.query(RoomMember).filter_by(player_id=u.player_id)]
         rows = (db.query(Message).filter(Message.id > after, or_(
-                (Message.to_id == u.player_id) & or_(Message.kind == "text", Message.created_at > cut),
+                (Message.to_id == u.player_id) & or_(Message.kind == "text", Message.created_at > cut) & ~Message.id.in_(extras.undelivered()),
                 Message.to_id.in_(tags) & (Message.sender != u.player_id)))
                 .order_by(Message.id).limit(100).all())
         if rows or time.time() >= deadline:
@@ -672,7 +688,7 @@ def chats(db, u):
     me_id = u.player_id
     tags = ["R-%d" % m.room_id for m in db.query(RoomMember).filter_by(player_id=me_id)]
     rows = (db.query(Message).filter(Message.kind == "text", or_(
-            Message.sender == me_id, Message.to_id == me_id, Message.to_id.in_(tags)))
+            Message.sender == me_id, (Message.to_id == me_id) & ~Message.id.in_(extras.undelivered()), Message.to_id.in_(tags)))
             .order_by(Message.id.desc()).limit(400).all())
     clears = {c.peer: c.upto for c in db.query(ChatClear).filter_by(owner=me_id)}
     seen, out = set(), []
@@ -774,9 +790,10 @@ def rooms_get(db, u):
     mine = {m.room_id for m in db.query(RoomMember).filter_by(player_id=u.player_id)}
     cnt = dict(db.query(RoomMember.room_id, func.count(RoomMember.id)).group_by(RoomMember.room_id).all())
     ra = {x.room_id: x.avatar or "" for x in db.query(RoomExt)}
-    fl = extras.room_flags(db)
+    fl, adm = extras.room_flags(db), extras.my_admin_rooms(db, u.player_id)
     return jsonify(rooms=[{"id": r.id, "kind": r.kind, "name": r.name, "about": r.about, "owner": r.owner,
                            "count": cnt.get(r.id, 0), "joined": r.id in mine, "avatar": ra.get(r.id, ""),
+                           "is_admin": r.owner == u.player_id or r.id in adm,
                            "verified": extras.room_verified(fl, r, cnt.get(r.id, 0))}
                           for r in db.query(Room).order_by(Room.id.desc()) if r.kind == "channel" or r.id in mine])
 
@@ -852,6 +869,7 @@ def rooms_leave(db, u, rid):
             db.commit()
             return jsonify(ok=True)
         r.owner = nxt.player_id  # kepemilikan pindah ke anggota tertua
+    extras.drop_admin(db, rid, u.player_id)
     db.delete(m)
     db.commit()
     return jsonify(ok=True)
@@ -883,12 +901,12 @@ def rooms_members(db, u, rid):
     ids = [m.player_id for m in db.query(RoomMember).filter_by(room_id=rid).order_by(RoomMember.id)]
     users = {x.player_id: x for x in db.query(User).filter(User.player_id.in_(ids))}
     pr = prof(db, ids)
-    out = []
+    out, adm = [], extras.admin_ids(db, rid)
     for i in ids:
         if i in users:
             o = pub(users[i], pr)
             out.append({"player_id": i, "full_name": o["full_name"], "avatar": o["avatar"],
-                        "verified": o["verified"], "room_owner": i == r.owner})
+                        "verified": o["verified"], "room_owner": i == r.owner, "admin": i == r.owner or i in adm})
     return jsonify(members=out)
 
 
@@ -899,8 +917,9 @@ def calls(db, u):
     hid = {h.call_id for h in db.query(CallHide).filter_by(owner=me_id)}
     rows = db.query(Call).filter(or_(Call.caller == me_id, Call.callee == me_id)).order_by(Call.id.desc()).limit(150).all()
     rows = [c for c in rows if c.id not in hid][:50]
+    secs = extras.call_secs(db, [c.id for c in rows])
     return jsonify(calls=[{"id": c.id, "peer": c.callee if c.caller == me_id else c.caller, "out": c.caller == me_id,
-                           "video": bool(c.video), "status": c.status,
+                           "video": bool(c.video), "status": c.status, "secs": secs.get(c.id),
                            "t": c.created_at.isoformat() + "Z"} for c in rows])
 
 
@@ -921,7 +940,7 @@ def calls_hide(db, u):
     return jsonify(ok=True)
 
 
-extras.register(app, authed, owner_only, Session, OFFICIAL)
+extras.register(app, authed, owner_only, Session, OFFICIAL, dict(target_user=target_user, is_verified=is_verified, is_owner=is_owner, banned=lambda: _cache["banned"]))
 
 
 @app.get("/")
@@ -932,7 +951,11 @@ def home():
 @app.get("/<path:f>")
 def static_files(f):
     if f in PUBLIC_FILES:
-        return send_from_directory(BASE, f)
+        r = send_from_directory(BASE, f)
+        if f == "sw.js":  # service worker harus selalu terbaru
+            r.headers["Cache-Control"] = "no-cache"
+            r.headers["Service-Worker-Allowed"] = "/"
+        return r
     return "Not found", 404
 
 

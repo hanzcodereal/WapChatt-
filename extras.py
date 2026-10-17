@@ -4,6 +4,11 @@
 - Polling              : tabel polls, poll_options, poll_votes (grup, chat pribadi, saluran; di saluran suara anonim)
 - Pertanyaan saluran   : tabel questions, q_answers (admin tidak bisa menjawab; hanya admin yang melihat nama + ID penjawab, pengikut lain tidak)
 - Balas jawaban        : tabel q_replies (admin membalas penjawab, penjawab membalas admin; hanya label peran yang tampil)
+- Detail pengguna      : GET /api/admin/users/<id> (khusus owner; hanya data akun dan angka ringkasan, isi pesan tidak pernah dikirim)
+- Blokir kontak        : tabel blocks + undelivered (pesan dari yang diblokir tidak sampai; pengirim melihat satu centang)
+- Admin grup/saluran   : tabel room_admins (jadikan admin, keluarkan anggota grup)
+- Durasi panggilan     : tabel call_times
+- Notifikasi push      : tabel push_subs (opsional; butuh pywebpush + VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY)
 - Teruskan pesan       : POST /api/forward
 - Link grup            : tabel room_invites (kode undangan acak per grup; link saluran dan profil tidak butuh tabel)
 - Bintangi pesan       : tabel star_msgs (pribadi, hanya terlihat pemilik)
@@ -11,11 +16,11 @@
 
 Semua tabel BARU, jadi database Neon yang sudah ada tidak perlu migrasi (dibuat otomatis oleh init_db()).
 """
-import re, secrets
+import os, re, json, secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, func, or_, and_
-from database import Base, Message, Room, RoomMember, User
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, func, or_, and_, select
+from database import Base, Message, Room, RoomMember, User, Contact, Profile, ProfileExt, Story
 
 VERIFY_AT = 1000           # jumlah pengikut untuk centang biru otomatis
 MAX_PINS = 3               # jumlah pesan yang bisa disematkan per chat
@@ -105,6 +110,41 @@ class ChatRead(Base):
     last_id = Column(Integer, nullable=False, default=0)     # pesan dengan id <= ini sudah dibaca
 
 
+class Block(Base):
+    __tablename__ = "blocks"
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)    # yang memblokir
+    target = Column(String(12), nullable=False, index=True)   # yang diblokir
+
+
+class Undelivered(Base):
+    __tablename__ = "undelivered"
+    msg_id = Column(Integer, primary_key=True)                # pesan yang dikirim ke orang yang memblokir pengirimnya
+
+
+class RoomAdmin(Base):
+    __tablename__ = "room_admins"
+    id = Column(Integer, primary_key=True)
+    room_id = Column(Integer, nullable=False, index=True)
+    player_id = Column(String(12), nullable=False, index=True)
+
+
+class CallTime(Base):
+    __tablename__ = "call_times"
+    call_id = Column(Integer, primary_key=True)
+    started = Column(DateTime, nullable=False)
+    secs = Column(Integer, nullable=True)
+
+
+class PushSub(Base):
+    __tablename__ = "push_subs"
+    id = Column(Integer, primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)
+    endpoint = Column(Text, nullable=False)
+    p256dh = Column(String(200), nullable=False)
+    auth = Column(String(100), nullable=False)
+
+
 class RoomInvite(Base):
     __tablename__ = "room_invites"
     room_id = Column(Integer, primary_key=True)
@@ -115,6 +155,13 @@ class RoomFlag(Base):
     __tablename__ = "room_flags"
     room_id = Column(Integer, primary_key=True)
     verified = Column(Boolean, nullable=True)   # None = aturan otomatis, True = beri centang, False = cabut
+
+
+def mask_email(e):
+    """budi.santoso@gmail.com -> bu*******@g****.com (email utuh tidak pernah dikirim ke klien)"""
+    name, _, dom = (e or "").partition("@")
+    host, _, tld = dom.rpartition(".")
+    return name[:2] + "*" * max(3, len(name) - 2) + "@" + (host[:1] + "*" * max(3, len(host) - 1) if host else "***") + ("." + tld if tld else "")
 
 
 def iso(dt):
@@ -162,6 +209,108 @@ def in_chat(m, me, peer):
     return {m.sender, m.to_id} == {me, peer}
 
 
+def undelivered():
+    return select(Undelivered.msg_id)
+
+
+def is_blocked(db, owner, target):
+    return bool(db.query(Block.id).filter_by(owner=owner, target=target).first())
+
+
+def is_admin(db, r, pid):
+    """Pemilik selalu admin; admin lain dicatat di room_admins."""
+    return bool(r) and (r.owner == pid or bool(db.query(RoomAdmin.id).filter_by(room_id=r.id, player_id=pid).first()))
+
+
+def admin_ids(db, rid):
+    return {a.player_id for a in db.query(RoomAdmin).filter_by(room_id=rid)}
+
+
+def my_admin_rooms(db, me):
+    return {a.room_id for a in db.query(RoomAdmin).filter_by(player_id=me)}
+
+
+def drop_admin(db, rid, pid):
+    db.query(RoomAdmin).filter_by(room_id=rid, player_id=pid).delete(synchronize_session=False)
+
+
+def call_start(db, call_id):
+    if not db.get(CallTime, call_id):
+        db.add(CallTime(call_id=call_id, started=datetime.utcnow()))
+
+
+def call_end(db, a, b):
+    """Dipanggil saat salah satu pihak mengirim 'end': hitung durasi panggilan terjawab terakhir antara a dan b."""
+    from database import Call
+    c = db.query(Call).filter(or_(and_(Call.caller == a, Call.callee == b), and_(Call.caller == b, Call.callee == a))).order_by(Call.id.desc()).first()
+    t = db.get(CallTime, c.id) if c and c.status == "answered" else None  # panggilan terakhir harus yang terjawab, bukan panggilan lama
+    if t and t.secs is None:
+        t.secs = max(0, int((datetime.utcnow() - t.started).total_seconds()))
+
+
+def call_secs(db, ids):
+    return {t.call_id: t.secs for t in db.query(CallTime).filter(CallTime.call_id.in_(ids))} if ids else {}
+
+
+def plain_preview(b):
+    b = re.sub(r"^\[(re:\d+|st:[^\]]*|fwd)\]", "", b or "")
+    if b.startswith("[stk:"):
+        return "Stiker"
+    for tag, lab in (("[poll:", "Polling: "), ("[qna:", "Pertanyaan: ")):
+        if b.startswith(tag):
+            return lab + b.split("]", 1)[-1]
+    return re.sub(r"@\[[^|\]]*\|([^\]]*)\]", r"@\1", b)[:120]
+
+
+def push_enabled():
+    return bool(os.getenv("VAPID_PRIVATE_KEY") and os.getenv("VAPID_PUBLIC_KEY"))
+
+
+def push_to(db, owners, payload):
+    """Kirim Web Push ke perangkat milik 'owners'. Diam-diam dilewati kalau pywebpush / kunci VAPID belum dipasang."""
+    if not owners or not push_enabled():
+        return
+    try:
+        from pywebpush import webpush, WebPushException
+    except Exception:
+        return
+    for sub in db.query(PushSub).filter(PushSub.owner.in_(list(owners))).limit(40).all():
+        try:
+            webpush(subscription_info={"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+                    data=json.dumps(payload), vapid_private_key=os.getenv("VAPID_PRIVATE_KEY"),
+                    vapid_claims={"sub": os.getenv("VAPID_SUBJECT", "mailto:admin@example.com")}, timeout=3, ttl=3600)
+        except WebPushException as e:
+            if getattr(e, "response", None) is not None and e.response.status_code in (404, 410):
+                db.delete(sub)
+        except Exception:
+            pass
+    db.commit()
+
+
+def notify_send(db, m, sender_name):
+    """Hook setelah pesan tersimpan: push untuk pesan baru dan panggilan masuk."""
+    if not push_enabled() or db.get(Undelivered, m.id):
+        return
+    if m.kind == "sig":
+        try:
+            s = json.loads(m.body)
+        except ValueError:
+            return
+        if s.get("type") == "offer":
+            push_to(db, [m.to_id], {"title": sender_name, "body": "Panggilan video masuk" if (s.get("data") or {}).get("video") else "Panggilan suara masuk",
+                                    "tag": "call-" + m.sender, "peer": m.sender, "call": True})
+        return
+    if m.to_id.startswith("R-"):
+        rid = room_of(m.to_id)
+        r = db.get(Room, rid) if rid else None
+        if not r:
+            return
+        owners = [x.player_id for x in db.query(RoomMember).filter(RoomMember.room_id == rid, RoomMember.player_id != m.sender).limit(20)]
+        push_to(db, owners, {"title": r.name, "body": sender_name + ": " + plain_preview(m.body), "tag": "chat-" + m.to_id, "peer": m.to_id})
+    else:
+        push_to(db, [m.to_id], {"title": sender_name, "body": plain_preview(m.body), "tag": "chat-" + m.sender, "peer": m.sender})
+
+
 def can_post(db, me, to):
     """Aturan sama dengan /api/send: saluran hanya pemilik, grup anggota, chat pribadi ke pengguna yang ada."""
     if to == OFFICIAL:
@@ -169,7 +318,7 @@ def can_post(db, me, to):
     rid = room_of(to)
     if to.startswith("R-"):
         r = db.get(Room, rid) if rid else None
-        return bool(r) and bool(db.query(RoomMember.id).filter_by(room_id=r.id, player_id=me).first()) and (r.kind == "group" or r.owner == me)
+        return bool(r) and bool(db.query(RoomMember.id).filter_by(room_id=r.id, player_id=me).first()) and (r.kind == "group" or is_admin(db, r, me))
     return bool(db.query(User.id).filter_by(player_id=to).first())
 
 
@@ -184,7 +333,7 @@ def can_pin_in(db, me, peer):
     if rid is None:
         return can_chat(db, me, peer)
     r = db.get(Room, rid)
-    return bool(r) and can_chat(db, me, peer) and (r.kind == "group" or r.owner == me)  # saluran: hanya pemilik
+    return bool(r) and can_chat(db, me, peer) and (r.kind == "group" or is_admin(db, r, me))  # saluran: pemilik dan admin
 
 
 def drop_polls(db, cond):
@@ -215,6 +364,7 @@ def on_msg_delete(db, m):
 def on_room_purge(db, rid):
     tag = "R-%d" % rid
     db.query(ChatRead).filter(ChatRead.peer == tag).delete(synchronize_session=False)
+    db.query(RoomAdmin).filter(RoomAdmin.room_id == rid).delete(synchronize_session=False)
     drop_polls(db, Poll.chat == tag)
     drop_questions(db, Question.chat == tag)
     mids = [i for (i,) in db.query(Message.id).filter(Message.to_id == tag)]
@@ -226,6 +376,9 @@ def on_room_purge(db, rid):
 
 
 def on_user_purge(db, pid):
+    db.query(Block).filter(or_(Block.owner == pid, Block.target == pid)).delete(synchronize_session=False)
+    db.query(RoomAdmin).filter(RoomAdmin.player_id == pid).delete(synchronize_session=False)
+    db.query(PushSub).filter(PushSub.owner == pid).delete(synchronize_session=False)
     db.query(ChatRead).filter(or_(ChatRead.owner == pid, ChatRead.peer == pid)).delete(synchronize_session=False)
     drop_polls(db, or_(Poll.owner == pid, Poll.chat == pid))
     drop_questions(db, or_(Question.owner == pid, Question.chat == pid))
@@ -236,9 +389,10 @@ def on_user_purge(db, pid):
     db.query(PinnedMsg).filter(PinnedMsg.by == pid).delete(synchronize_session=False)
 
 
-def register(app, authed, owner_only, Session, official="NOVA"):
+def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
     global OFFICIAL
     OFFICIAL = official
+    H = helpers or {}
 
     # ---------- polling ----------
     def poll_dict(db, me, p):
@@ -552,7 +706,7 @@ def register(app, authed, owner_only, Session, official="NOVA"):
             return jsonify(unread={})
         out = {}
         dm = db.query(Message.sender, func.count(Message.id)).outerjoin(ChatRead, and_(ChatRead.owner == me, ChatRead.peer == Message.sender)) \
-            .filter(Message.to_id == me, Message.sender != me, Message.kind == "text", Message.id > func.coalesce(ChatRead.last_id, 0)).group_by(Message.sender)
+            .filter(Message.to_id == me, Message.sender != me, Message.kind == "text", Message.id > func.coalesce(ChatRead.last_id, 0), ~Message.id.in_(undelivered())).group_by(Message.sender)
         out.update({k: n for k, n in dm})
         if tags:
             rm = db.query(Message.to_id, func.count(Message.id)).outerjoin(ChatRead, and_(ChatRead.owner == me, ChatRead.peer == Message.to_id)) \
@@ -573,6 +727,103 @@ def register(app, authed, owner_only, Session, official="NOVA"):
             r.last_id = max(r.last_id or 0, mx)
         else:
             db.add(ChatRead(owner=me, peer=peer, last_id=mx))
+        db.commit()
+        return jsonify(ok=True)
+
+    # ---------- blokir kontak ----------
+    @app.get("/api/blocks")
+    @authed
+    def blocks_get(db, u):
+        ids = [b.target for b in db.query(Block).filter_by(owner=u.player_id).order_by(Block.id.desc())]
+        names = {x.player_id: x.full_name for x in db.query(User).filter(User.player_id.in_(ids))} if ids else {}
+        return jsonify(blocks=[{"player_id": i, "full_name": names.get(i, i)} for i in ids])
+
+    @app.post("/api/blocks")
+    @authed
+    def blocks_post(db, u):
+        d = request.get_json(silent=True) or {}
+        pid = str(d.get("pid") or "")
+        if pid == u.player_id or pid == OFFICIAL or not db.query(User.id).filter_by(player_id=pid).first():
+            return jsonify(error="Kontak tidak bisa diblokir."), 400
+        b = db.query(Block).filter_by(owner=u.player_id, target=pid).first()
+        if d.get("value") and not b:
+            db.add(Block(owner=u.player_id, target=pid))
+        elif not d.get("value") and b:
+            db.delete(b)
+        db.commit()
+        return jsonify(ok=True)
+
+    @app.get("/api/chatstate")
+    @authed
+    def chatstate(db, u):
+        peer = request.args.get("peer", "")
+        blocked = is_blocked(db, peer, u.player_id) or peer in H.get("banned", lambda: set())()   # diblokir lawan bicara atau akunnya diblokir owner
+        last = db.query(func.max(Message.id)).filter(Message.sender == peer, Message.to_id == u.player_id, Message.kind == "text").scalar() or 0
+        return jsonify(blocked=bool(blocked), last=last, i_blocked=is_blocked(db, u.player_id, peer))
+
+    # ---------- admin grup / saluran ----------
+    @app.post("/api/rooms/<int:rid>/admin")
+    @authed
+    def room_admin_set(db, u, rid):
+        r = db.get(Room, rid)
+        d = request.get_json(silent=True) or {}
+        pid = str(d.get("pid") or "")
+        if not r or not is_admin(db, r, u.player_id):
+            return jsonify(error="Hanya admin yang bisa mengatur admin."), 403
+        if pid == r.owner or not db.query(RoomMember.id).filter_by(room_id=rid, player_id=pid).first():
+            return jsonify(error="Anggota tidak ditemukan atau pemilik sudah otomatis admin."), 400
+        a = db.query(RoomAdmin).filter_by(room_id=rid, player_id=pid).first()
+        if d.get("value") and not a:
+            db.add(RoomAdmin(room_id=rid, player_id=pid))
+        elif not d.get("value") and a:
+            if u.player_id != r.owner and pid != u.player_id:
+                return jsonify(error="Hanya pemilik yang bisa mencabut admin lain."), 403
+            db.delete(a)
+        db.commit()
+        return jsonify(ok=True)
+
+    @app.post("/api/rooms/<int:rid>/kick")
+    @authed
+    def room_kick(db, u, rid):
+        r = db.get(Room, rid)
+        pid = str((request.get_json(silent=True) or {}).get("pid") or "")
+        if not r or r.kind != "group" or not is_admin(db, r, u.player_id):
+            return jsonify(error="Hanya admin grup yang bisa mengeluarkan anggota."), 403
+        m = db.query(RoomMember).filter_by(room_id=rid, player_id=pid).first()
+        if not m or pid == r.owner or pid == u.player_id:
+            return jsonify(error="Anggota tidak bisa dikeluarkan."), 400
+        if is_admin(db, r, pid) and u.player_id != r.owner:
+            return jsonify(error="Hanya pemilik yang bisa mengeluarkan admin."), 403
+        drop_admin(db, rid, pid)
+        db.delete(m)
+        db.commit()
+        return jsonify(ok=True)
+
+    # ---------- notifikasi push (opsional) ----------
+    @app.get("/api/push/key")
+    @authed
+    def push_key(db, u):
+        return jsonify(key=os.getenv("VAPID_PUBLIC_KEY", "") if push_enabled() else "")
+
+    @app.post("/api/push/subscribe")
+    @authed
+    def push_sub(db, u):
+        d = request.get_json(silent=True) or {}
+        k = d.get("keys") or {}
+        ep, p256, au = str(d.get("endpoint") or ""), str(k.get("p256dh") or ""), str(k.get("auth") or "")
+        if not ep.startswith("https://") or not p256 or not au or len(ep) > 1000:
+            return jsonify(error="Langganan tidak valid."), 400
+        for x in db.query(PushSub).filter(PushSub.endpoint == ep).all():
+            db.delete(x)
+        db.add(PushSub(owner=u.player_id, endpoint=ep, p256dh=p256[:200], auth=au[:100]))
+        db.commit()
+        return jsonify(ok=True)
+
+    @app.post("/api/push/unsubscribe")
+    @authed
+    def push_unsub(db, u):
+        ep = str((request.get_json(silent=True) or {}).get("endpoint") or "")
+        db.query(PushSub).filter(PushSub.owner == u.player_id, PushSub.endpoint == ep).delete(synchronize_session=False)
         db.commit()
         return jsonify(ok=True)
 
@@ -616,6 +867,35 @@ def register(app, authed, owner_only, Session, official="NOVA"):
             db.add(RoomMember(room_id=r.id, player_id=u.player_id))
             db.commit()
         return jsonify(id=r.id)
+
+    # ---------- owner: detail pengguna ----------
+    @app.get("/api/admin/users/<pid>")
+    @owner_only
+    def adm_user_detail(db, u, pid):
+        t, err = H["target_user"](db, u, pid, allow_self=True)
+        if err:
+            return err
+        now = datetime.utcnow()
+        day = now - timedelta(days=1)
+        ext, prof = db.get(ProfileExt, pid), db.get(Profile, pid)
+        ls = ext.last_seen if ext else None
+        cnt = lambda q: q.scalar() or 0
+        sent = db.query(func.count(Message.id)).filter(Message.sender == pid, Message.kind == "text")
+        rooms = db.query(Room).join(RoomMember, RoomMember.room_id == Room.id).filter(RoomMember.player_id == pid).order_by(Room.id.desc()).all()
+        size = {rid: n for rid, n in db.query(RoomMember.room_id, func.count(RoomMember.id)).filter(RoomMember.room_id.in_([r.id for r in rooms])).group_by(RoomMember.room_id)} if rooms else {}
+        return jsonify(user={
+            "player_id": t.player_id, "full_name": t.full_name, "email": mask_email(t.email), "birth_year": t.birth_year,
+            "age": now.year - t.birth_year, "status": (prof.status if prof else "") or "",
+            "created_at": iso(t.created_at), "last_seen": iso(ls), "online": bool(ls and (now - ls).total_seconds() < 90),
+            "verified": H["is_verified"](t), "owner": H["is_owner"](t), "banned": t.player_id in H["banned"](),
+            "public": ext.public is not False if ext else True, "show_seen": ext.show_seen is not False if ext else True,
+            "contacts": cnt(db.query(func.count(Contact.id)).filter(Contact.owner == pid)),
+            "saved_by": cnt(db.query(func.count(Contact.id)).filter(Contact.contact_pid == pid)),
+            "sent": cnt(sent), "sent24": cnt(sent.filter(Message.created_at > day)),
+            "received": cnt(db.query(func.count(Message.id)).filter(Message.to_id == pid, Message.kind == "text")),
+            "stories": cnt(db.query(func.count(Story.id)).filter(Story.owner == pid, Story.created_at > day)),
+            "rooms": [{"id": r.id, "kind": r.kind, "name": r.name, "owned": r.owner == pid, "count": size.get(r.id, 0)} for r in rooms[:40]],
+            "rooms_total": len(rooms)})
 
     # ---------- owner: centang biru saluran ----------
     @app.post("/api/admin/rooms/<int:rid>/verify")

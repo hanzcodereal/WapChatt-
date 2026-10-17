@@ -447,3 +447,36 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 /* lencana jumlah berwarna kuning (warna utama aplikasi) */
 .dot.cnt,.nb{background:var(--y);color:var(--ink)}
 .item.unread .meta span{color:var(--ink)}
+
+/* ----- tag anggota, centang, wallpaper, kunci aplikasi ----- */
+#form{position:relative}
+.mpop{position:absolute;left:.5rem;right:.5rem;bottom:100%;margin-bottom:.4rem;background:#fff;border:3px solid var(--ink);box-shadow:4px 4px 0 var(--ink);max-height:42dvh;overflow:auto;z-index:20}
+.mpop[hidden]{display:none}
+.mopt{display:flex;align-items:center;gap:.6rem;width:100%;padding:.5rem .7rem;background:#fff;border:0;border-bottom:2px solid var(--ink);font:inherit;text-align:left;cursor:pointer;color:var(--ink)}
+.mopt:last-child{border-bottom:0}
+.mopt:hover,.mopt:focus-visible{background:var(--y)}
+.mopt .av,.mall{width:2rem;height:2rem;font-size:.9rem;flex:none}
+.mall{display:grid;place-items:center;background:var(--y);border:2px solid var(--ink);border-radius:50%}
+.ment{color:var(--red)}
+.ment.me{background:var(--y);color:var(--ink);padding:0 .2rem}
+.bub.tagged{box-shadow:3px 3px 0 var(--red)}
+.bub .tk.dlv{color:#fff;filter:drop-shadow(0 0 1px var(--ink)) drop-shadow(0 0 1px var(--ink))}
+.wpgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-bottom:.8rem}
+.wpsw{aspect-ratio:1;border:3px solid var(--ink);font:700 .68rem "JetBrains Mono",monospace;display:grid;place-items:end center;padding:.3rem;background:#FFEFC2;cursor:pointer;color:var(--ink)}
+.lockscr{position:fixed;inset:0;z-index:9999;background:var(--y);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;padding:1rem}
+.lockscr .llogo{width:84px;height:84px;border:3px solid var(--ink);border-radius:50%;object-fit:cover}
+.lockscr h2{margin:0}
+.lsub{margin:0}
+.ldots{display:flex;gap:.7rem;margin:.4rem 0}
+.ldots i{width:1rem;height:1rem;border:3px solid var(--ink);border-radius:50%;background:#fff}
+.ldots i.on{background:var(--ink)}
+.lmsg{min-height:1.2rem;margin:0;font-weight:700;color:var(--red);text-align:center}
+.lpad{display:grid;grid-template-columns:repeat(3,4.2rem);gap:.7rem}
+.lkey{height:4.2rem;border:3px solid var(--ink);background:#fff;font:700 1.4rem "JetBrains Mono",monospace;box-shadow:3px 3px 0 var(--ink);cursor:pointer;color:var(--ink)}
+.lkey:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+.lkey.ghost{visibility:hidden}
+.lkey.sm{font-size:.7rem}
+.lockscr.shake{animation:lshake .35s}
+@keyframes lshake{20%,60%{transform:translateX(-10px)}40%,80%{transform:translateX(10px)}}
+@media (prefers-reduced-motion:reduce){.lockscr.shake{animation:none}}
+.cover[role=button]{cursor:zoom-in}
