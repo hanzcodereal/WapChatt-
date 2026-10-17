@@ -489,3 +489,26 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 .bub.sticker .tk.seen{color:#7CC6FF}
 /* foto profil saat kamera mati: satu lingkaran saja, tanpa garis ganda */
 .tav .av{box-shadow:none;border:4px solid var(--y)}
+
+/* ----- pesan suara, reaksi, warna centang abu-abu ala WhatsApp ----- */
+.bub .tk,.bub .tk.dlv{color:#667781}
+.bub .tk.seen{color:#53BDEB}
+.bub.voice{min-width:min(78%,250px)}
+.vnw{display:flex;align-items:center;gap:.5rem;width:100%;min-width:200px}
+.vnb{flex:none;width:2.4rem;height:2.4rem;border-radius:50%;border:3px solid var(--ink);background:var(--red);color:#fff;display:grid;place-items:center;cursor:pointer;padding:0}
+.vnb .ic{width:1rem;height:1rem}
+.vnr{flex:1;min-width:0;accent-color:var(--ink)}
+.vnt{flex:none;font:700 .72rem "JetBrains Mono",monospace;min-width:2.6rem;text-align:right}
+.vnp{flex:none;font-size:.65rem;color:var(--mut)}
+.vrec{position:absolute;inset:0;z-index:30;display:flex;align-items:center;gap:.6rem;padding:.5rem .7rem;background:var(--y);border-top:3px solid var(--ink)}
+.vrec .vtime{flex:1;font:700 1.05rem "JetBrains Mono",monospace}
+.vrec .btn{padding:.5rem .9rem}
+.vdot{width:.9rem;height:.9rem;border-radius:50%;background:var(--red);border:2px solid var(--ink);animation:vblink 1s steps(2) infinite}
+@keyframes vblink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.vdot{animation:none}}
+.bub .rx{flex-basis:100%;display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.15rem}
+.rxc{border:2px solid var(--ink);background:#fff;border-radius:999px;padding:0 .45rem;font:700 .78rem/1.5 "JetBrains Mono",monospace;cursor:pointer;color:var(--ink)}
+.rxc.on{background:var(--y)}
+.rxgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:.5rem;margin-bottom:.8rem}
+.rxpick{aspect-ratio:1;border:3px solid var(--ink);background:#fff;font-size:1.5rem;cursor:pointer;padding:0}
+.rxpick.on{background:var(--y)}

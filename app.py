@@ -291,6 +291,10 @@ def send(db, u):
                 return jsonify(error="Stiker tidak ditemukan."), 400
     if kind == "text" and body.startswith(("[poll:", "[qna:", "[fwd]")):
         return jsonify(error="Pesan tidak valid."), 400
+    if kind == "text" and body.startswith("[vn:"):
+        err = extras.check_voice(db, u.player_id, body)
+        if err:
+            return jsonify(error=err), 400
     if kind == "text" and to == OFFICIAL:
         return jsonify(error="Akun resmi hanya mengirim pengumuman."), 400
     if kind == "text" and to.startswith("R-") and to[2:].isdigit():

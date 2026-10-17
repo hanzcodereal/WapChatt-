@@ -16,11 +16,112 @@ window.WCX = function (c) {
     t.scrollIntoView({ behavior: "smooth", block: "center" }); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 1200);
   }
 
+  /* ---------- pesan suara: rekam, kirim, putar ---------- */
+  const VN = /^\[vn:([0-9a-f]{24}):(\d{1,3})\]$/;
+  const fmtT = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  let playing = null;  // hanya satu pesan suara yang diputar sekali waktu
+  function voicePlayer(src, secs, pending) {
+    const w = mk("div", null, "vnw"), a = new Audio(), b = mk("button", null, "vnb"), r = mk("input", null, "vnr"), t = mk("span", fmtT(secs), "vnt");
+    a.preload = "none"; a.src = src; b.type = "button"; b.setAttribute("aria-label", "Putar pesan suara"); b.append(ic("play"));
+    r.type = "range"; r.min = 0; r.max = secs; r.step = 0.1; r.value = 0; r.setAttribute("aria-label", "Posisi pemutaran");
+    const setIcon = (n) => { b.replaceChildren(ic(n)); b.setAttribute("aria-label", n === "play" ? "Putar pesan suara" : "Jeda"); };
+    b.onclick = () => {
+      if (a.paused) { if (playing && playing !== a) playing.pause(); playing = a; a.play().catch(() => toast("Pesan suara tidak bisa diputar")); } else a.pause();
+    };
+    a.onplay = () => setIcon("pause"); a.onpause = () => setIcon("play");
+    a.onended = () => { setIcon("play"); r.value = 0; t.textContent = fmtT(secs); };
+    a.ontimeupdate = () => { r.value = a.currentTime; t.textContent = fmtT(a.currentTime); };
+    r.oninput = () => { a.currentTime = +r.value; };
+    w.append(b, r, t); if (pending) w.append(mk("span", "Mengirim...", "vnp"));
+    return w;
+  }
+  const b64 = (blob) => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(",")[1] || ""); f.onerror = rej; f.readAsDataURL(blob); });
+  async function sendVoice(blob, secs, to) {
+    const url = URL.createObjectURL(blob);
+    const el = c.addMsg({ sender: c.me().player_id, to, kind: "text", body: "[vn:" + "0".repeat(24) + ":" + secs + "]", localVoice: { url, secs }, t: new Date().toISOString(), pending: true });
+    const note = el.querySelector(".vnp");
+    try {
+      const up = await api("/voice", { method: "POST", body: JSON.stringify({ mime: blob.type || "audio/webm", secs, data: await b64(blob) }) });
+      const m = await c.send(to, "text", "[vn:" + up.id + ":" + secs + "]");
+      st.last[to] = m.body; st.lastT[to] = m.t; el.dataset.t = m.t; el.dataset.mid = m.id; st.byId[m.id] = m;
+      el.querySelector("time").textContent = c.tm(m.t); el.querySelector(".tk").replaceWith(c.tick(m)); c.render(); if (note) note.remove();
+    } catch (err) { if (note) note.textContent = "Gagal"; el.querySelector(".tk").replaceWith(ic("x", "tk fail")); toast("Pesan suara gagal terkirim: " + err.message); }
+  }
+  let rec = null;
+  async function startVoice() {
+    const to = st.cur; if (!to || rec) return;
+    if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Browser ini belum mendukung rekam suara.");
+    let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); } catch { return toast("Izin mikrofon ditolak. Izinkan mikrofon di pengaturan browser."); }
+    const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    let mr; try { mr = new MediaRecorder(stream, Object.assign({ audioBitsPerSecond: 32000 }, mime ? { mimeType: mime } : {})); } catch { stream.getTracks().forEach((t) => t.stop()); return toast("Rekam suara tidak didukung di browser ini."); }
+    const parts = [], t0 = Date.now(); let cancelled = false, timer = 0;
+    const bar = mk("div", null, "vrec"), dot = mk("i", null, "vdot"), tt = mk("b", "0:00", "vtime"), cx = mk("button", "Batal", "btn ghost"), ok = mk("button", "Kirim", "btn");
+    bar.setAttribute("role", "group"); bar.setAttribute("aria-label", "Merekam pesan suara"); cx.type = ok.type = "button"; bar.append(dot, tt, cx, ok); $("#form").append(bar);
+    rec = { cancel: () => { cancelled = true; mr.stop(); } }; mr.ondataavailable = (e) => e.data && e.data.size && parts.push(e.data);
+    mr.onstop = async () => {
+      clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); bar.remove(); rec = null;
+      const secs = Math.max(1, Math.round((Date.now() - t0) / 1000));
+      if (cancelled || !parts.length) return;
+      if (secs < 1) return toast("Rekaman terlalu pendek");
+      await sendVoice(new Blob(parts, { type: (mr.mimeType || mime || "audio/webm").split(";")[0] }), Math.min(secs, 180), to);
+    };
+    timer = setInterval(() => { const s = Math.round((Date.now() - t0) / 1000); tt.textContent = fmtT(s); if (s >= 180) mr.stop(); }, 500);  // otomatis berhenti dan terkirim di 3 menit
+    cx.onclick = () => { cancelled = true; mr.stop(); }; ok.onclick = () => mr.stop();
+    mr.start(1000);
+  }
+  $("#mic").onclick = startVoice;
+
+  /* ---------- reaksi emoji ---------- */
+  const RXS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😡", "🤔", "👎"], rx = {};
+  const isChannel = () => { const r = c.roomOf(st.cur || ""); return !!r && r.kind === "channel"; };
+  function chip(id, o) {
+    const b = mk("button", o.e + (o.n > 1 ? " " + o.n : ""), "rxc" + (o.mine ? " on" : "")); b.type = "button";
+    b.setAttribute("aria-label", "Reaksi " + o.e + ", " + o.n + (o.mine ? ", milikmu" : "")); b.onclick = () => react(id, o.mine ? "" : o.e);
+    return b;
+  }
+  function paintReactions() {
+    document.querySelectorAll("#msgs .bub[data-mid]").forEach((d) => {
+      const id = d.dataset.mid, list = rx[id] || []; let box = d.querySelector(":scope > .rx");
+      if (!list.length) { if (box) box.remove(); return; }
+      if (!box) { box = mk("div", null, "rx"); d.append(box); }
+      box.replaceChildren(...list.map((o) => chip(+id, o)));
+    });
+  }
+  async function loadReactions() {
+    const p = st.cur; if (!p) return;
+    try { const r = await api("/reactions?peer=" + encodeURIComponent(p)); if (st.cur !== p) return; Object.keys(rx).forEach((k) => delete rx[k]); Object.assign(rx, r.reactions); paintReactions(); } catch {}
+  }
+  async function react(id, emoji) {
+    try { const r = await api("/react", { method: "POST", body: JSON.stringify({ msg_id: id, emoji }) }); if (r.reactions.length) rx[id] = r.reactions; else delete rx[id]; paintReactions(); }
+    catch (err) { toast(err.message); }
+  }
+  function pickReaction(m) {
+    const mine = ((rx[m.id] || []).find((o) => o.mine) || {}).e;
+    c.sheet("Beri reaksi", (box, close) => {
+      const g = mk("div", null, "rxgrid");
+      RXS.forEach((e) => { const b = mk("button", e, "rxpick" + (e === mine ? " on" : "")); b.type = "button"; b.setAttribute("aria-label", "Reaksi " + e); b.onclick = () => { close(); react(m.id, e === mine ? "" : e); }; g.append(b); });
+      box.append(g);
+      if (mine) { const r = mk("button", "Hapus reaksiku", "btn full ghost"); r.type = "button"; r.onclick = () => { close(); react(m.id, ""); }; box.append(r); }
+    });
+  }
+  function showReactors(m) {
+    const list = rx[m.id] || [];
+    c.sheet("Reaksi", (box) => list.forEach((o) => {
+      box.append(mk("p", o.e + " " + o.n, "dlg-l"));
+      const ul = mk("ul", null, "list"); (o.users || []).forEach((p) => ul.append(c.row(null, p === c.me().player_id ? "Kamu" : c.gName(p), "", () => {}, {}))); box.append(ul);
+    }));
+  }
+
   /* ---------- polling & pertanyaan (tampil di gelembung) ---------- */
   const POLL = /^\[poll:(\d+)\]([\s\S]*)$/, QNA = /^\[qna:(\d+)\]([\s\S]*)$/;
-  const preview = (b) => { let m = POLL.exec(b || ""); if (m) return "Polling: " + m[2]; m = QNA.exec(b || ""); return m ? "Pertanyaan: " + m[2] : null; };
+  const preview = (b) => { let m = VN.exec(b || ""); if (m) return "Pesan suara (" + fmtT(+m[2]) + ")"; m = POLL.exec(b || ""); if (m) return "Polling: " + m[2]; m = QNA.exec(b || ""); return m ? "Pertanyaan: " + m[2] : null; };
   const label = (icon, text) => { const h = mk("div", null, "ph"); h.append(ic(icon), mk("span", text)); return h; };
   function fill(box, m, d) {
+    const vm = m.localVoice ? [0, 0, m.localVoice.secs] : VN.exec(m.body);
+    if (vm) {
+      box.append(voicePlayer(m.localVoice ? m.localVoice.url : "/api/voice/" + vm[1], +vm[2], !!m.localVoice)); d.classList.add("voice");
+      return true;
+    }
     const pm = POLL.exec(m.body), qm = QNA.exec(m.body);
     if (!pm && !qm) return false;
     const w = mk("div", null, pm ? "pollw" : "qnaw"), id = (pm || qm)[1];
@@ -173,7 +274,7 @@ window.WCX = function (c) {
 
   /* ---------- teruskan pesan ---------- */
   async function forwardMsg(m) {
-    if (POLL.test(m.body) || QNA.test(m.body)) return toast("Polling dan pertanyaan tidak bisa diteruskan.");
+    if (POLL.test(m.body) || QNA.test(m.body) || VN.test(m.body)) return toast("Polling, pertanyaan, dan pesan suara tidak bisa diteruskan.");
     const me = c.me(), t = [
       ...st.contacts.filter((x) => x.player_id !== c.OFFICIAL).map((x) => ({ player_id: x.player_id, full_name: x.full_name, avatar: x.avatar })),
       ...st.rooms.filter((r) => r.joined && (r.kind === "group" || r.is_admin)).map((r) => ({ player_id: "R-" + r.id, full_name: r.name + (r.kind === "group" ? " (grup)" : " (saluran)"), avatar: r.avatar })),
@@ -270,7 +371,7 @@ window.WCX = function (c) {
     if (bubbleOf(p.msg.id)) jump(p.msg.id); else showPins();
     pinIdx = (pinIdx + 1) % pins.length; paintBar();
   };
-  setInterval(() => { if (st.cur && !$("#room").hidden) { loadPins(); refreshWidgets(); loadChatState(st.cur); } }, 15000);  // sematan dari lawan bicara ikut muncul
+  setInterval(() => { if (st.cur && !$("#room").hidden) { loadPins(); refreshWidgets(); loadChatState(st.cur); loadReactions(); } }, 15000);  // sematan dari lawan bicara ikut muncul
 
   /* ---------- menu titik tiga di tiap pesan ---------- */
   function menuBtn(mt, d, m, mine, sid) {
@@ -284,15 +385,19 @@ window.WCX = function (c) {
     if (!id || !m) return toast("Tunggu pesan terkirim dulu");
     const txt = c.parseRe(m.body).text, acts = [], pinned = pins.find((p) => p.msg.id === id);
     if (!$("#form").hidden) acts.push({ key: "reply", label: "Balas" });
-    if (!POLL.test(m.body) && !QNA.test(m.body)) acts.push({ key: "fwd", label: "Teruskan" });
+    acts.push({ key: "react", label: "Beri reaksi" });
+    if ((rx[id] || []).length && !isChannel()) acts.push({ key: "seerx", label: "Lihat reaksi" });
+    if (!POLL.test(m.body) && !QNA.test(m.body) && !VN.test(m.body)) acts.push({ key: "fwd", label: "Teruskan" });
     acts.push({ key: "star", label: stars.has(id) ? "Hapus bintang" : "Beri bintang" });
     if (canPin) acts.push({ key: "pin", label: pinned ? "Lepas sematan pesan" : "Sematkan pesan" });
-    if (!sid && txt) acts.push({ key: "copy", label: "Salin teks" });
+    if (!sid && txt && !VN.test(m.body)) acts.push({ key: "copy", label: "Salin teks" });
     if (sid && !mine) acts.push({ key: "stk", label: "Simpan stiker" });
     if (mine) acts.push({ key: "del", label: "Hapus pesan", danger: true });
     const x = await dialog({ title: "Pesan", ok: null, actions: acts });
     if (!x) return;
     if (x.action === "reply") c.startReply(id);
+    else if (x.action === "react") pickReaction(m);
+    else if (x.action === "seerx") showReactors(m);
     else if (x.action === "fwd") forwardMsg(m);
     else if (x.action === "star") { const on = !stars.has(id); if (await setStar(id, on)) toast(on ? "Diberi bintang" : "Bintang dihapus"); }
     else if (x.action === "pin") { if (pinned) unpin(pinned.id); else pinMsg(m); }
@@ -694,7 +799,9 @@ window.WCX = function (c) {
 
   return {
     preview, fill, menuBtn, showPins, showStars, shareLink, consumeLink, loadUnread, markRead, userDetail,
+    historyLoaded() { loadReactions(); },
     rich, encodeMentions, memberMenu, blockToggle, loadBlocks, wallpaperFor, notify, notifyCall,
-    opened() { pins = []; canPin = false; pinIdx = 0; paintBar(); loadPins(); applyWp(st.cur); loadChatState(st.cur); picked.clear(); mpop.hidden = true; },  // dipanggil tiap chat dibuka
+    opened() { Object.keys(rx).forEach((k) => delete rx[k]); if (rec) rec.cancel(); pins = [];  // pindah chat saat merekam: rekaman dibatalkan
+     canPin = false; pinIdx = 0; paintBar(); loadPins(); applyWp(st.cur); loadChatState(st.cur); picked.clear(); mpop.hidden = true; },  // dipanggil tiap chat dibuka
   };
 };

@@ -425,6 +425,7 @@ async function initDashboard() {
     const memP = r && r.kind === "group" ? loadMem(r) : null;
     (await api("/history?peer=" + encodeURIComponent(p))).messages.forEach(addMsg);
     if (memP) await memP;
+    if (X.historyLoaded) X.historyLoaded();
     render();
   }
   $("#back").onclick = () => { st.cur = null; show(st.tab); };
@@ -493,16 +494,6 @@ async function initDashboard() {
     if (trayTab === "stiker" && !mySt().length) t.append(mk("p", "Belum ada stiker. Tap Buat stiker untuk membuatnya dari fotomu.", "hint"));
   }
   $("#plus").onclick = () => { const t = $("#tray"); t.hidden = !t.hidden; if (!t.hidden) renderPanel(); };
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition; let rec;
-  $("#mic").onclick = () => {
-    if (!SR) return toast("Browser ini belum mendukung dikte suara. Coba Chrome di Android.");
-    if (rec) return rec.stop();
-    rec = new SR(); rec.lang = "id-ID"; $("#mic").classList.add("rec");
-    rec.onresult = (e) => { $("#text").value = ($("#text").value + " " + e.results[0][0].transcript).trim(); upd(); };
-    rec.onerror = (e) => { if (e.error === "not-allowed") toast("Izin mikrofon ditolak."); };
-    rec.onend = () => { $("#mic").classList.remove("rec"); rec = null; };
-    rec.start();
-  };
   async function saveId(id) {
     try {
       await api("/contacts", { method: "POST", body: JSON.stringify({ player_id: id }) });
@@ -1279,7 +1270,7 @@ async function initDashboard() {
   try { localStorage.removeItem("nova_lock"); } catch {}  // sisa kunci aplikasi lama
 
   /* ----- polling pesan + sinyal ----- */
-  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL, showMembers, refreshTicks, pick, plain }));
+  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL, showMembers, refreshTicks, pick, plain, send }));
   await Promise.all([loadContacts(), loadRooms(), loadStories(), loadChats(), loadPresence()]);
   if (X.loadUnread) await X.loadUnread();
   if (X.loadBlocks) X.loadBlocks();

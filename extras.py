@@ -9,6 +9,8 @@
 - Admin grup/saluran   : tabel room_admins (jadikan admin, keluarkan anggota grup)
 - Durasi panggilan     : tabel call_times
 - Notifikasi push      : tabel push_subs (opsional; butuh pywebpush + VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY)
+- Pesan suara          : tabel voices (direkam di browser, disimpan di database, maks ~3 menit)
+- Reaksi emoji         : tabel reactions (chat pribadi, grup, saluran; di saluran penggunanya tidak ditampilkan)
 - Teruskan pesan       : POST /api/forward
 - Link grup            : tabel room_invites (kode undangan acak per grup; link saluran dan profil tidak butuh tabel)
 - Bintangi pesan       : tabel star_msgs (pribadi, hanya terlihat pemilik)
@@ -16,10 +18,10 @@
 
 Semua tabel BARU, jadi database Neon yang sudah ada tidak perlu migrasi (dibuat otomatis oleh init_db()).
 """
-import os, re, json, secrets
+import os, re, json, base64, secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify, redirect
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, func, or_, and_, select
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, LargeBinary, func, or_, and_, select
 from database import Base, Message, Room, RoomMember, User, Contact, Profile, ProfileExt, Story
 
 VERIFY_AT = 1000           # jumlah pengikut untuk centang biru otomatis
@@ -28,6 +30,10 @@ MAX_FWD = 5                # maksimal tujuan sekali teruskan (seperti WhatsApp)
 POLL_RE = re.compile(r"^\[poll:(\d+)\]")
 QNA_RE = re.compile(r"^\[qna:(\d+)\]")
 OFFICIAL = "NOVA"          # diisi ulang oleh register()
+VN_RE = re.compile(r"^\[vn:([0-9a-f]{24}):(\d{1,3})\]$")
+MAX_VN = 1_800_000         # byte, batas satu pesan suara (dikirim sekali jalan, di bawah batas 4,5 MB Vercel)
+MAX_VN_SECS = 190
+REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😡", "🤔", "👎"]
 PIN_HOURS = {24, 168, 720}  # 24 jam, 7 hari, 30 hari (0 / kosong = tanpa batas)
 
 
@@ -145,6 +151,25 @@ class PushSub(Base):
     auth = Column(String(100), nullable=False)
 
 
+class Voice(Base):
+    __tablename__ = "voices"
+    id = Column(String(24), primary_key=True)
+    owner = Column(String(12), nullable=False, index=True)
+    mime = Column(String(40), nullable=False)
+    secs = Column(Integer, nullable=False)
+    data = Column(LargeBinary, nullable=False)
+    sent = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class Reaction(Base):
+    __tablename__ = "reactions"
+    id = Column(Integer, primary_key=True)
+    msg_id = Column(Integer, nullable=False, index=True)
+    player_id = Column(String(12), nullable=False, index=True)
+    emoji = Column(String(8), nullable=False)
+
+
 class RoomInvite(Base):
     __tablename__ = "room_invites"
     room_id = Column(Integer, primary_key=True)
@@ -209,6 +234,49 @@ def in_chat(m, me, peer):
     return {m.sender, m.to_id} == {me, peer}
 
 
+def check_voice(db, me, body):
+    """Dipanggil /api/send untuk pesan '[vn:...]': suara harus milik pengirim dan belum dipakai."""
+    mm = VN_RE.match(body)
+    v = db.get(Voice, mm.group(1)) if mm else None
+    if not v or v.owner != me or v.sent:
+        return "Pesan suara tidak ditemukan, coba rekam ulang."
+    v.sent = True
+    return None
+
+
+def vn_ids_in(db, cond):
+    out = []
+    for (b,) in db.query(Message.body).filter(Message.body.like("[vn:%"), cond):
+        mm = VN_RE.match(b or "")
+        if mm:
+            out.append(mm.group(1))
+    return out
+
+
+def drop_voices(db, ids):
+    if ids:
+        db.query(Voice).filter(Voice.id.in_(list(ids))).delete(synchronize_session=False)
+
+
+def reactions_for(db, me, ids, anon):
+    """{msg_id: [{e, n, mine, users?}]}; users hanya untuk chat non-saluran (anon=False)."""
+    out = {}
+    if not ids:
+        return out
+    by = {}
+    for r in db.query(Reaction).filter(Reaction.msg_id.in_(list(ids))):
+        by.setdefault(r.msg_id, {}).setdefault(r.emoji, []).append(r.player_id)
+    for mid, d in by.items():
+        lst = []
+        for e, users in sorted(d.items(), key=lambda kv: -len(kv[1])):
+            o = {"e": e, "n": len(users), "mine": me in users}
+            if not anon:
+                o["users"] = users
+            lst.append(o)
+        out[mid] = lst
+    return out
+
+
 def undelivered():
     return select(Undelivered.msg_id)
 
@@ -256,6 +324,8 @@ def plain_preview(b):
     b = re.sub(r"^\[(re:\d+|st:[^\]]*|fwd)\]", "", b or "")
     if b.startswith("[stk:"):
         return "Stiker"
+    if b.startswith("[vn:"):
+        return "Pesan suara"
     for tag, lab in (("[poll:", "Polling: "), ("[qna:", "Pertanyaan: ")):
         if b.startswith(tag):
             return lab + b.split("]", 1)[-1]
@@ -355,6 +425,10 @@ def drop_questions(db, cond):
 
 
 def on_msg_delete(db, m):
+    db.query(Reaction).filter(Reaction.msg_id == m.id).delete(synchronize_session=False)
+    mm = VN_RE.match(m.body or "")
+    if mm:
+        drop_voices(db, [mm.group(1)])
     drop_polls(db, Poll.msg_id == m.id)
     drop_questions(db, Question.msg_id == m.id)
     db.query(PinnedMsg).filter(PinnedMsg.msg_id == m.id).delete(synchronize_session=False)
@@ -363,6 +437,10 @@ def on_msg_delete(db, m):
 
 def on_room_purge(db, rid):
     tag = "R-%d" % rid
+    drop_voices(db, vn_ids_in(db, Message.to_id == tag))
+    mids = [i for (i,) in db.query(Message.id).filter(Message.to_id == tag)]
+    if mids:
+        db.query(Reaction).filter(Reaction.msg_id.in_(mids)).delete(synchronize_session=False)
     db.query(ChatRead).filter(ChatRead.peer == tag).delete(synchronize_session=False)
     db.query(RoomAdmin).filter(RoomAdmin.room_id == rid).delete(synchronize_session=False)
     drop_polls(db, Poll.chat == tag)
@@ -376,6 +454,9 @@ def on_room_purge(db, rid):
 
 
 def on_user_purge(db, pid):
+    drop_voices(db, vn_ids_in(db, or_(Message.sender == pid, Message.to_id == pid)))
+    drop_voices(db, [i for (i,) in db.query(Voice.id).filter(Voice.owner == pid)])
+    db.query(Reaction).filter(Reaction.player_id == pid).delete(synchronize_session=False)
     db.query(Block).filter(or_(Block.owner == pid, Block.target == pid)).delete(synchronize_session=False)
     db.query(RoomAdmin).filter(RoomAdmin.player_id == pid).delete(synchronize_session=False)
     db.query(PushSub).filter(PushSub.owner == pid).delete(synchronize_session=False)
@@ -643,6 +724,8 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
         body = m.body or ""
         if body.startswith(("[poll:", "[qna:")):
             return jsonify(error="Polling dan pertanyaan tidak bisa diteruskan."), 400
+        if body.startswith("[vn:"):
+            return jsonify(error="Pesan suara tidak bisa diteruskan."), 400
         body = re.sub(r"^\[(re:\d+|st:[^\]]*)\]", "", body)  # kutipan balasan / status tidak ikut diteruskan
         if not body.startswith(("[stk:", "[fwd]")):
             body = "[fwd]" + body
@@ -884,6 +967,85 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
         db.query(PushSub).filter(PushSub.owner == u.player_id, PushSub.endpoint == ep).delete(synchronize_session=False)
         db.commit()
         return jsonify(ok=True)
+
+    # ---------- pesan suara ----------
+    @app.post("/api/voice")
+    @authed
+    def voice_up(db, u):
+        d = request.get_json(silent=True) or {}
+        mime = str(d.get("mime") or "").split(";")[0].strip().lower()
+        secs = d.get("secs")
+        if not re.fullmatch(r"audio/(webm|ogg|mp4|mpeg|aac|x-m4a|wav|x-wav)", mime) or not isinstance(secs, int) or not 1 <= secs <= MAX_VN_SECS:
+            return jsonify(error="Rekaman tidak valid."), 400
+        try:
+            raw = base64.b64decode(d.get("data") or "", validate=True)
+        except Exception:
+            return jsonify(error="Rekaman rusak."), 400
+        if not raw or len(raw) > MAX_VN:
+            return jsonify(error="Rekaman terlalu panjang (maksimal sekitar 3 menit)."), 400
+        old = [i for (i,) in db.query(Voice.id).filter(Voice.owner == u.player_id, Voice.sent.is_(False), Voice.created_at < datetime.utcnow() - timedelta(hours=1))]
+        drop_voices(db, old)  # bersihkan rekaman lama yang tidak jadi dikirim
+        v = Voice(id=secrets.token_hex(12), owner=u.player_id, mime=mime, secs=secs, data=raw, sent=False)
+        db.add(v)
+        db.commit()
+        return jsonify(id=v.id)
+
+    @app.get("/api/voice/<vid>")
+    def voice_get(vid):
+        # id acak 96-bit tidak bisa ditebak (seperti stiker), jadi <audio> bisa memuat tanpa header Authorization
+        if not re.fullmatch(r"[0-9a-f]{24}", vid):
+            return "", 404
+        with Session() as db:
+            v = db.get(Voice, vid)
+            if not v:
+                return "", 404
+            data, mime = bytes(v.data), v.mime
+        size, start, end, partial = len(data), 0, len(data) - 1, False
+        mm = re.match(r"bytes=(\d*)-(\d*)$", request.headers.get("Range", "").strip())  # Safari butuh dukungan Range untuk audio
+        if mm and (mm.group(1) or mm.group(2)):
+            partial = True
+            if mm.group(1):
+                start = int(mm.group(1))
+                end = int(mm.group(2)) if mm.group(2) else size - 1
+            else:
+                start = max(0, size - int(mm.group(2)))
+        end = min(end, size - 1)
+        if start >= size or start > end:
+            r = app.response_class(status=416)
+            r.headers["Content-Range"] = "bytes */%d" % size
+            return r
+        r = app.response_class(data[start:end + 1], status=206 if partial else 200, mimetype=mime)
+        r.headers["Accept-Ranges"] = "bytes"
+        r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        if partial:
+            r.headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+        return r
+
+    # ---------- reaksi emoji ----------
+    @app.get("/api/reactions")
+    @authed
+    def reactions_get(db, u):
+        me, peer = u.player_id, request.args.get("peer", "")
+        if not can_chat(db, me, peer):
+            return jsonify(reactions={})
+        q = db.query(Message.id).filter(Message.kind == "text")
+        q = q.filter(Message.to_id == peer) if peer.startswith("R-") else q.filter(or_(and_(Message.sender == me, Message.to_id == peer), and_(Message.sender == peer, Message.to_id == me)))
+        ids = [i for (i,) in q.order_by(Message.id.desc()).limit(200)]
+        return jsonify(reactions=reactions_for(db, me, ids, room_kind(db, peer) == "channel"))
+
+    @app.post("/api/react")
+    @authed
+    def react_post(db, u):
+        d = request.get_json(silent=True) or {}
+        m = db.get(Message, d.get("msg_id")) if isinstance(d.get("msg_id"), int) else None
+        emoji = str(d.get("emoji") or "")
+        if not m or m.kind != "text" or not can_see(db, u.player_id, m) or (emoji and emoji not in REACTIONS):
+            return jsonify(error="Reaksi tidak valid."), 400
+        db.query(Reaction).filter_by(msg_id=m.id, player_id=u.player_id).delete(synchronize_session=False)  # satu reaksi per orang per pesan
+        if emoji:
+            db.add(Reaction(msg_id=m.id, player_id=u.player_id, emoji=emoji))
+        db.commit()
+        return jsonify(id=m.id, reactions=reactions_for(db, u.player_id, [m.id], room_kind(db, m.to_id) == "channel").get(m.id, []))
 
     # ---------- link grup (undangan) ----------
     @app.post("/api/rooms/<int:rid>/invite")
