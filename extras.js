@@ -569,40 +569,57 @@ window.WCX = function (c) {
   $("#lockbtn").onclick = lockSettings; updLock();
 
   /* ---------- pasang aplikasi + notifikasi ---------- */
-  let deferred = null, pushKey = "";
-  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferred = e; });
-  window.addEventListener("appinstalled", () => { deferred = null; toast("Aplikasi terpasang"); updInst(); });
+  let pushKey = "", pushOk = false;
   const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-  const updInst = () => { const s = $("#instbtn small"); if (s) s.textContent = standalone() ? "Sudah terpasang di perangkat ini" : "Unduh WapChatt ke layar utama"; };
+  const getPrompt = () => window.__wcInstall || null;  // sinyal siap-dipasang ditangkap lebih awal di <head> dashboard.html
+  const updInst = () => { const s = $("#instbtn small"); if (s) s.textContent = standalone() ? "Sudah terpasang di perangkat ini" : getPrompt() ? "Ketuk untuk memasang" : "Unduh WapChatt ke layar utama"; };
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); window.__wcInstall = e; updInst(); });
+  window.addEventListener("appinstalled", () => { window.__wcInstall = null; toast("Aplikasi terpasang"); updInst(); });
   $("#instbtn").onclick = async () => {
     if (standalone()) return toast("Aplikasi sudah terpasang di perangkat ini");
-    if (deferred) { deferred.prompt(); await deferred.userChoice.catch(() => {}); deferred = null; return; }
+    const p = getPrompt();
+    if (p) {  // satu ketukan: langsung muncul kotak "Pasang aplikasi" dari browser
+      p.prompt(); const r = await p.userChoice.catch(() => ({})); window.__wcInstall = null; updInst();
+      return r.outcome === "accepted" ? toast("Memasang aplikasi...") : undefined;
+    }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    dialog({ title: "Pasang aplikasi", desc: ios ? "Buka lewat Safari, ketuk tombol Bagikan, lalu pilih Tambah ke Layar Utama." : "Buka menu browser (titik tiga), lalu pilih Instal aplikasi atau Tambahkan ke layar utama.", ok: null });
+    dialog({ title: "Pasang aplikasi", desc: ios ? "Buka lewat Safari, ketuk tombol Bagikan, lalu pilih Tambah ke Layar Utama." : "Browser belum menyediakan tombol pasang otomatis. Buka menu browser (titik tiga), lalu pilih Instal aplikasi atau Tambahkan ke layar utama.", ok: null });
   };
-  updInst();
+  updInst(); setTimeout(updInst, 3000);
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
     navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.open) c.open(e.data.open); });  // ketuk notifikasi: buka chat-nya
   }
-  const NK = "wc_notif", notOn = () => localStorage.getItem(NK) === "1" && "Notification" in window && Notification.permission === "granted";
-  const updNot = () => { const s = $("#notbtn small"); if (s) s.textContent = !("Notification" in window) ? "Tidak didukung di browser ini" : notOn() ? (pushKey ? "Aktif" : "Aktif saat aplikasi terbuka") : "Pesan dan panggilan masuk"; };
+  const NK = "wc_notif", perm = () => ("Notification" in window ? Notification.permission : "unsupported");
+  const notOn = () => localStorage.getItem(NK) === "1" && perm() === "granted";
+  const updNot = () => {  // tulisan kecil selalu menunjukkan keadaan sebenarnya
+    const s = $("#notbtn small"); if (!s) return; const p = perm();
+    s.textContent = p === "unsupported" ? "Tidak didukung di browser ini" : p === "denied" ? "Diblokir di browser. Ketuk untuk cara membukanya"
+      : notOn() ? (pushOk ? "Aktif, termasuk saat aplikasi ditutup" : "Aktif saat aplikasi terbuka") : p === "granted" ? "Izin sudah ada. Ketuk untuk menyalakan" : "Ketuk untuk menyalakan";
+  };
   const key64 = (s) => Uint8Array.from(atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/")), (ch) => ch.charCodeAt(0));
   async function pushSub(on) {  // langganan push dari server supaya notifikasi tetap masuk walau aplikasi tertutup (butuh kunci VAPID di server)
     try {
       const reg = await navigator.serviceWorker.ready; if (!reg.pushManager) return;
       pushKey = (await api("/push/key")).key || ""; let sub = await reg.pushManager.getSubscription();
-      if (!on) { if (sub) { await api("/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: sub.endpoint }) }); await sub.unsubscribe(); } return; }
+      if (!on) { pushOk = false; if (sub) { await api("/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: sub.endpoint }) }); await sub.unsubscribe(); } return; }
       if (!pushKey) return;
       sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key64(pushKey) });
-      await api("/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) });
-    } catch {} finally { updNot(); }
+      await api("/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) }); pushOk = true;
+    } catch { pushOk = false; } finally { updNot(); }
   }
   $("#notbtn").onclick = async () => {
-    if (!("Notification" in window)) return dialog({ title: "Notifikasi tidak didukung", desc: "Browser ini belum mendukung notifikasi. Pasang aplikasinya atau pakai Chrome atau Safari terbaru.", ok: null });
-    if (notOn()) { localStorage.setItem(NK, "0"); await pushSub(false); return toast("Notifikasi dimatikan"); }
-    if (await Notification.requestPermission() !== "granted") return toast("Izin notifikasi ditolak. Ubah lewat pengaturan browser.");
-    localStorage.setItem(NK, "1"); toast("Notifikasi dinyalakan"); await pushSub(true);
+    let p = perm();
+    if (p === "unsupported") return dialog({ title: "Notifikasi tidak didukung", desc: "Browser ini belum mendukung notifikasi. Pasang aplikasinya atau pakai Chrome atau Safari terbaru.", ok: null });
+    if (notOn()) { localStorage.setItem(NK, "0"); await pushSub(false); updNot(); return toast("Notifikasi dimatikan"); }
+    if (p === "default") p = await Notification.requestPermission();  // kalau izin sudah diberikan, tidak ditanya lagi
+    if (p !== "granted") {
+      updNot();
+      return dialog({ title: "Izin notifikasi belum aktif", desc: "Browser memblokir notifikasi untuk situs ini. Ketuk ikon di sebelah alamat situs (gembok atau pengaturan), buka Izin atau Setelan situs, ubah Notifikasi menjadi Izinkan, lalu muat ulang halaman dan ketuk tombol ini lagi.", ok: null });
+    }
+    localStorage.setItem(NK, "1"); await pushSub(true); updNot();
+    showNotif("Notifikasi aktif", { body: "Pesan dan panggilan akan muncul di sini.", tag: "tes" });  // percobaan: kalau ini muncul, notifikasi sudah berfungsi
+    toast("Notifikasi dinyalakan");
   };
   if (notOn()) pushSub(true); else updNot();
   async function showNotif(title, o) {
