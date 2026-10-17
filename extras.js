@@ -572,15 +572,24 @@ window.WCX = function (c) {
   let pushKey = "", pushOk = false;
   const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const getPrompt = () => window.__wcInstall || null;  // sinyal siap-dipasang ditangkap lebih awal di <head> dashboard.html
-  const updInst = () => { const s = $("#instbtn small"); if (s) s.textContent = standalone() ? "Sudah terpasang di perangkat ini" : getPrompt() ? "Ketuk untuk memasang" : "Unduh WapChatt ke layar utama"; };
+  const IK = "wc_installed";  // penanda aplikasi sudah terpasang di perangkat ini
+  const setInstalled = (v) => { try { v ? localStorage.setItem(IK, "1") : localStorage.removeItem(IK); } catch {} updInst(); };
+  const isInstalled = () => standalone() || (localStorage.getItem(IK) === "1" && !getPrompt());  // browser menawarkan pemasangan = belum terpasang (atau sudah dihapus)
+  const updInst = () => {  // tombol hilang sendiri kalau aplikasi sudah terpasang
+    if (getPrompt() && !standalone()) try { localStorage.removeItem(IK); } catch {}
+    const b = $("#instbtn"); if (!b) return; b.hidden = isInstalled();
+    const s = b.querySelector("small"); if (s) s.textContent = getPrompt() ? "Ketuk untuk memasang" : "Unduh WapChatt ke layar utama";
+  };
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); window.__wcInstall = e; updInst(); });
-  window.addEventListener("appinstalled", () => { window.__wcInstall = null; toast("Aplikasi terpasang"); updInst(); });
+  window.addEventListener("appinstalled", () => { window.__wcInstall = null; setInstalled(true); toast("Aplikasi terpasang"); });
+  if (standalone()) setInstalled(true);
+  else if (navigator.getInstalledRelatedApps) navigator.getInstalledRelatedApps().then((l) => { if (l && l.length) setInstalled(true); }).catch(() => {});
   $("#instbtn").onclick = async () => {
-    if (standalone()) return toast("Aplikasi sudah terpasang di perangkat ini");
     const p = getPrompt();
     if (p) {  // satu ketukan: langsung muncul kotak "Pasang aplikasi" dari browser
-      p.prompt(); const r = await p.userChoice.catch(() => ({})); window.__wcInstall = null; updInst();
-      return r.outcome === "accepted" ? toast("Memasang aplikasi...") : undefined;
+      p.prompt(); const r = await p.userChoice.catch(() => ({})); window.__wcInstall = null;
+      if (r.outcome === "accepted") { setInstalled(true); return toast("Memasang aplikasi..."); }
+      return updInst();
     }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), issues = [];  // cari tahu kenapa browser belum menawarkan pemasangan
     try { const r = await fetch("/manifest.json", { cache: "no-store" }); if (!r.ok) issues.push("manifest tidak ditemukan (status " + r.status + ")"); else { const m = await r.json(); const ic = await fetch(m.icons[0].src, { cache: "no-store" }); if (!ic.ok) issues.push("ikon tidak ditemukan (status " + ic.status + ")"); } } catch { issues.push("manifest tidak bisa dimuat"); }

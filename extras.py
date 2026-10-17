@@ -433,7 +433,9 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
 
     @app.get("/manifest.json")
     def pwa_manifest():
-        r = app.response_class(json.dumps(PWA_MANIFEST), mimetype="application/manifest+json")
+        # related_applications memungkinkan browser tahu aplikasinya sudah terpasang (tombol Pasang di Profil lalu hilang)
+        m = dict(PWA_MANIFEST, related_applications=[{"platform": "webapp", "url": "https://%s/manifest.json" % request.host}])
+        r = app.response_class(json.dumps(m), mimetype="application/manifest+json")
         r.headers["Cache-Control"] = "public, max-age=600"
         return r
 
