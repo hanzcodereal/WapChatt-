@@ -317,7 +317,10 @@ window.WCX = function (c) {
   /* kind: u = profil (target = ID), c = saluran (target = objek room), g = grup (target = objek room, hanya pemilik) */
   async function shareLink(kind, target) {
     if (kind === "u") return copyText(ORIGIN + "/?u=" + encodeURIComponent(target), "Link profil disalin");
-    if (kind === "c") return copyText(ORIGIN + "/?c=" + target.id, "Link saluran disalin");
+    if (kind === "c") {  // link memuat nama saluran: /c/nama-saluran-ID
+      const slug = String(target.name || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "saluran";
+      return copyText(ORIGIN + "/c/" + slug + "-" + target.id, "Link saluran disalin");
+    }
     let link = await groupLink(target, false); if (!link) return;
     for (;;) {
       const x = await dialog({ title: "Link grup", desc: link + "\n\nSiapa pun yang membuka link ini bisa bergabung ke grup. Buat link baru kalau link lama sudah tersebar ke orang yang tidak diinginkan.", ok: null, actions: [
@@ -428,8 +431,8 @@ window.WCX = function (c) {
   async function loadBlocks() { try { (await api("/blocks")).blocks.forEach((b) => st.blocked.add(b.player_id)); } catch {} }
   async function blockToggle(pid) {
     const on = !st.blocked.has(pid), nm = c.nameOf(pid);
-    if (on && !(await dialog({ title: "Blokir " + nm + "?", desc: "Pesan dan panggilan darinya tidak akan sampai ke kamu. Kamu juga tidak bisa mengirim pesan ke dia sampai blokirnya dibuka.", ok: "Blokir" }))) return;
-    try { await api("/blocks", { method: "POST", body: JSON.stringify({ pid, value: on }) }); on ? st.blocked.add(pid) : st.blocked.delete(pid); toast(on ? nm + " diblokir" : "Blokir dibuka"); } catch (e) { toast(e.message); }
+    if (on && !(await dialog({ title: "Blokir " + nm + "?", desc: "Pesan dan panggilan darinya tidak akan sampai ke kamu. Pesan yang kamu kirim ke dia juga tidak akan sampai (satu centang abu-abu).", ok: "Blokir" }))) return;
+    try { await api("/blocks", { method: "POST", body: JSON.stringify({ pid, value: on }) }); on ? st.blocked.add(pid) : st.blocked.delete(pid); toast(on ? nm + " diblokir" : "Blokir dibuka"); loadChatState(pid); } catch (e) { toast(e.message); }
   }
   async function showBlocked() {
     let v; try { v = (await api("/blocks")).blocks; } catch (e) { return toast(e.message); }

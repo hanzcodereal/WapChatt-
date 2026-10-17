@@ -18,7 +18,7 @@ Semua tabel BARU, jadi database Neon yang sudah ada tidak perlu migrasi (dibuat 
 """
 import os, re, json, secrets
 from datetime import datetime, timedelta
-from flask import request, jsonify
+from flask import request, jsonify, redirect
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, func, or_, and_, select
 from database import Base, Message, Room, RoomMember, User, Contact, Profile, ProfileExt, Story
 
@@ -439,6 +439,11 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
         r.headers["Cache-Control"] = "public, max-age=600"
         return r
 
+    @app.get("/c/<slug>")
+    def channel_link(slug):  # link saluran yang memuat namanya: /c/berita-harian-5 -> /?c=5
+        m = re.search(r"(\d{1,9})$", slug)
+        return redirect("/?c=" + m.group(1) if m else "/")
+
     @app.get("/sw.js")
     def pwa_sw():
         r = app.response_class(SW_JS, mimetype="text/javascript")
@@ -809,9 +814,10 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
     @authed
     def chatstate(db, u):
         peer = request.args.get("peer", "")
-        blocked = is_blocked(db, peer, u.player_id) or peer in H.get("banned", lambda: set())()   # diblokir lawan bicara atau akunnya diblokir owner
+        i_blocked = is_blocked(db, u.player_id, peer)
+        blocked = i_blocked or is_blocked(db, peer, u.player_id) or peer in H.get("banned", lambda: set())()   # saling blokir, atau akunnya diblokir owner: satu centang
         last = db.query(func.max(Message.id)).filter(Message.sender == peer, Message.to_id == u.player_id, Message.kind == "text").scalar() or 0
-        return jsonify(blocked=bool(blocked), last=last, i_blocked=is_blocked(db, u.player_id, peer))
+        return jsonify(blocked=bool(blocked), last=last, i_blocked=i_blocked)
 
     # ---------- admin grup / saluran ----------
     @app.post("/api/rooms/<int:rid>/admin")

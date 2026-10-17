@@ -460,7 +460,7 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 .ment{color:var(--red)}
 .ment.me{background:var(--y);color:var(--ink);padding:0 .2rem}
 .bub.tagged{box-shadow:3px 3px 0 var(--red)}
-.bub .tk.dlv{color:#fff;filter:drop-shadow(0 0 1px var(--ink)) drop-shadow(0 0 1px var(--ink))}
+.bub .tk.dlv{color:#6b6b6b}
 .wpgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-bottom:.8rem}
 .wpsw{aspect-ratio:1;border:3px solid var(--ink);font:700 .68rem "JetBrains Mono",monospace;display:grid;place-items:end center;padding:.3rem;background:#FFEFC2;cursor:pointer;color:var(--ink)}
 .lockscr{position:fixed;inset:0;z-index:9999;background:var(--y);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;padding:1rem}
@@ -480,3 +480,12 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 @keyframes lshake{20%,60%{transform:translateX(-10px)}40%,80%{transform:translateX(10px)}}
 @media (prefers-reduced-motion:reduce){.lockscr.shake{animation:none}}
 .cover[role=button]{cursor:zoom-in}
+
+/* centang: abu-abu (terkirim / diblokir), biru (sudah dibalas) */
+.bub .tk{color:#6b6b6b}
+.bub .tk.seen{color:var(--blue)}
+.bub .tk.fail{color:var(--red)}
+.bub.sticker .tk{color:#fff}
+.bub.sticker .tk.seen{color:#7CC6FF}
+/* foto profil saat kamera mati: satu lingkaran saja, tanpa garis ganda */
+.tav .av{box-shadow:none;border:4px solid var(--y)}

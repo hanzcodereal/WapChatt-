@@ -17,7 +17,7 @@ ser = URLSafeTimedSerializer(os.getenv("SECRET_KEY", "dev-secret-change-me"))
 init_db()
 
 GMAIL_RE = re.compile(r"^[a-z0-9.]+@gmail\.com$")  # pendaftaran hanya untuk email Gmail
-STK_RE = re.compile(r"^\[stk:([0-9a-f]{24})\]$")
+STK_RE = re.compile(r"^(?:\[re:\d+\])?\[stk:([0-9a-f]{24})\]$")  # boleh diawali [re:id] (stiker sebagai balasan)
 STK_DATA = re.compile(r"^data:image/(png|webp);base64,[A-Za-z0-9+/=]+$")
 OFFICIAL = "NOVA"  # akun resmi pengirim pengumuman (tidak bisa login)
 OWNER_IDS = {x.strip().upper() for x in os.getenv("OWNER_IDS", "").split(",") if x.strip()}  # kosong = akun pertama yang mendaftar
@@ -285,7 +285,7 @@ def send(db, u):
     body, to = (d.get("body") or "")[:20000 if kind == "sig" else 4000], d.get("to") or ""
     if kind == "text":
         body = body.strip()
-        if body.startswith("[stk:"):
+        if re.match(r"^(?:\[re:\d+\])?\[stk:", body):
             mm = STK_RE.match(body)
             if not mm or not db.get(Sticker, mm.group(1)):
                 return jsonify(error="Stiker tidak ditemukan."), 400
@@ -301,15 +301,13 @@ def send(db, u):
         ok = db.query(User.id).filter_by(player_id=to).first()
     if not body or not ok:
         return jsonify(error="Pesan tidak valid."), 400
-    if not to.startswith("R-") and to != u.player_id and extras.is_blocked(db, u.player_id, to):
-        return jsonify(error="Kamu memblokir kontak ini. Buka blokir dulu untuk mengirim pesan atau menelepon."), 403
     if kind == "sig":
         log_call(db, u.player_id, to, body)
     m = Message(sender=u.player_id, to_id=to, kind=kind, body=body)
     db.add(m)
     db.flush()
-    if not to.startswith("R-") and to != u.player_id and (extras.is_blocked(db, to, u.player_id) or to in _cache["banned"]):
-        db.add(extras.Undelivered(msg_id=m.id))  # diblokir: tersimpan untuk pengirim (satu centang) tapi tidak pernah sampai
+    if not to.startswith("R-") and to != u.player_id and (extras.is_blocked(db, to, u.player_id) or extras.is_blocked(db, u.player_id, to) or to in _cache["banned"]):
+        db.add(extras.Undelivered(msg_id=m.id))  # saling blokir / diblokir owner: tersimpan untuk pengirim (satu centang abu-abu) tapi tidak pernah sampai
     db.commit()
     try:
         extras.notify_send(db, m, u.full_name)

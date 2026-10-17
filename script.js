@@ -70,7 +70,7 @@ async function initDashboard() {
     setTimeout(() => t.remove(), 3600);
   };
   const X = {};  // fitur dari extras.js (foto/video, sematan pesan, bintang); diisi sebelum dashboard ditampilkan
-  const STK = /^\[stk:([0-9a-f]{24})\]$/;
+  const STK = /^(?:\[re:\d+\])?\[stk:([0-9a-f]{24})\]$/;  // stiker, boleh sebagai balasan
   const stkId = (b) => { const m = STK.exec(b || ""); return m && m[1]; };
   const RE = /^\[re:(\d+)\]([\s\S]*)$/;
   const FWD = /^\[fwd\]([\s\S]*)$/, STR = /^\[st:([^\]]*)\]([\s\S]*)$/;  // diteruskan / balasan untuk status
@@ -322,6 +322,7 @@ async function initDashboard() {
   const tick = (m) => {
     if (m.pending) return ic("clock", "tk");
     if (isRoom(m.to)) return ic("check", "tk");
+    if (m.to === me.player_id) return ic("check2", "tk seen");   // chat ke diri sendiri: langsung dua centang biru
     const cs = st.cs[m.to] || {};
     if (cs.blocked) return ic("check", "tk");                     // diblokir (oleh kontak atau owner): satu centang
     const replied = !!m.id && (cs.last || 0) > m.id;              // sudah dibalas: dua centang biru
@@ -377,7 +378,7 @@ async function initDashboard() {
     }
     const mine = m.sender === me.player_id, key = isRoom(m.to) || mine ? m.to : m.sender;
     st.last[key] = m.body; st.lastT[key] = m.t;
-    const r = roomOf(st.cur || ""), sid = stkId(m.body), d = mk("div", null, "bub " + (mine ? "out" : "in") + (sid ? " sticker" : "")), box = mk("div"), mt = mk("div", null, "mt");
+    const r = roomOf(st.cur || ""), sid = stkId(m.body), d = mk("div", null, "bub " + (mine ? "out" : "in") + (sid && !parseRe(m.body).id ? " sticker" : "")), box = mk("div"), mt = mk("div", null, "mt");
     const grp = !mine && r && r.kind === "group";
     if (grp) {
       if (!st.mem[m.sender] && !contact(m.sender) && !st.memBusy && !st.memTry[m.sender]) { st.memTry[m.sender] = 1; loadMem(r); }  // anggota baru: muat ulang daftar
@@ -386,7 +387,7 @@ async function initDashboard() {
     const rp = parseRe(m.body);
     if (m.id) st.byId[m.id] = m;
     d.dataset.mid = m.id || "";
-    if (sid) { const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
+    if (sid) { if (rp.id) box.append(quote(rp.id)); const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
     else if (X.fill && X.fill(box, m, d)) { /* polling / pertanyaan */ }
     else {
       if (rp.fwd) box.append(mk("small", "Diteruskan", "fwdl"));
@@ -458,7 +459,8 @@ async function initDashboard() {
     if (!st.cur) return;
     const to = st.cur; $("#tray").hidden = true;
     let id; try { id = await sha24(src); } catch { return toast("Browser ini belum mendukung kirim stiker."); }
-    const body = "[stk:" + id + "]";
+    const body = (st.reply ? "[re:" + st.reply + "]" : "") + "[stk:" + id + "]";  // stiker bisa dikirim sebagai balasan
+    stopReply();
     const el = addMsg({ sender: me.player_id, to, kind: "text", body, local: src, t: new Date().toISOString(), pending: true });
     try {
       await ensureSticker(src);
