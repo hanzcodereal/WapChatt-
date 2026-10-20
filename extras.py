@@ -22,7 +22,7 @@ import os, re, json, base64, secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify, redirect
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, LargeBinary, func, or_, and_, select
-from database import Base, Message, Room, RoomMember, User, Contact, Profile, ProfileExt, Story
+from database import Base, Message, Room, RoomMember, User, Contact, Profile, ProfileExt, Story, Call, CallHide
 
 VERIFY_AT = 1000           # jumlah pengikut untuk centang biru otomatis
 MAX_PINS = 3               # jumlah pesan yang bisa disematkan per chat
@@ -30,10 +30,11 @@ MAX_FWD = 5                # maksimal tujuan sekali teruskan (seperti WhatsApp)
 POLL_RE = re.compile(r"^\[poll:(\d+)\]")
 QNA_RE = re.compile(r"^\[qna:(\d+)\]")
 OFFICIAL = "NOVA"          # diisi ulang oleh register()
-VN_RE = re.compile(r"^\[vn:([0-9a-f]{24}):(\d{1,3})\]$")
+VN_RE = re.compile(r"^(?:\[re:\d+\])?\[vn:([0-9a-f]{24}):(\d{1,3})\]$")  # boleh diawali [re:id] (suara sebagai balasan)
 MAX_VN = 1_800_000         # byte, batas satu pesan suara (dikirim sekali jalan, di bawah batas 4,5 MB Vercel)
 MAX_VN_SECS = 190
-REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😡", "🤔", "👎"]
+REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😡", "🤔", "👎", "😍", "🥰", "😭", "😅", "🤣", "😎", "😁", "🙄", "😴", "🤝",
+             "🙌", "💯", "✅", "❌", "💔", "👀", "🤗", "😘", "🥳", "😇", "🤩", "😬"]  # harus sama dengan daftar di extras.js
 PIN_HOURS = {24, 168, 720}  # 24 jam, 7 hari, 30 hari (0 / kosong = tanpa batas)
 
 
@@ -246,7 +247,7 @@ def check_voice(db, me, body):
 
 def vn_ids_in(db, cond):
     out = []
-    for (b,) in db.query(Message.body).filter(Message.body.like("[vn:%"), cond):
+    for (b,) in db.query(Message.body).filter(or_(Message.body.like("[vn:%"), Message.body.like("[re:%][vn:%")), cond):
         mm = VN_RE.match(b or "")
         if mm:
             out.append(mm.group(1))
@@ -724,9 +725,9 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
         body = m.body or ""
         if body.startswith(("[poll:", "[qna:")):
             return jsonify(error="Polling dan pertanyaan tidak bisa diteruskan."), 400
+        body = re.sub(r"^\[(re:\d+|st:[^\]]*)\]", "", body)  # kutipan balasan / status tidak ikut diteruskan
         if body.startswith("[vn:"):
             return jsonify(error="Pesan suara tidak bisa diteruskan."), 400
-        body = re.sub(r"^\[(re:\d+|st:[^\]]*)\]", "", body)  # kutipan balasan / status tidak ikut diteruskan
         if not body.startswith(("[stk:", "[fwd]")):
             body = "[fwd]" + body
         body = body[:4000]
@@ -1020,6 +1021,19 @@ def register(app, authed, owner_only, Session, official="NOVA", helpers=None):
         if partial:
             r.headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
         return r
+
+    # ---------- panggilan di dalam chat kontak ----------
+    @app.get("/api/chatcalls")
+    @authed
+    def chatcalls(db, u):
+        me, peer = u.player_id, request.args.get("peer", "")
+        if not peer or peer == me or peer.startswith("R-"):
+            return jsonify(calls=[])
+        hid = {h.call_id for h in db.query(CallHide).filter_by(owner=me)}
+        rows = db.query(Call).filter(or_(and_(Call.caller == me, Call.callee == peer), and_(Call.caller == peer, Call.callee == me))).order_by(Call.id.desc()).limit(60).all()
+        rows = [c for c in rows if c.id not in hid][:40]
+        secs = call_secs(db, [c.id for c in rows])
+        return jsonify(calls=[{"id": c.id, "out": c.caller == me, "video": bool(c.video), "status": c.status, "secs": secs.get(c.id), "t": iso(c.created_at)} for c in rows])
 
     # ---------- reaksi emoji ----------
     @app.get("/api/reactions")

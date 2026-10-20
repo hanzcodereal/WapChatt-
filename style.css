@@ -506,9 +506,26 @@ button.link{background:none;border:0;cursor:pointer;font:inherit;text-decoration
 .vdot{width:.9rem;height:.9rem;border-radius:50%;background:var(--red);border:2px solid var(--ink);animation:vblink 1s steps(2) infinite}
 @keyframes vblink{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.vdot{animation:none}}
-.bub .rx{flex-basis:100%;display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.15rem}
-.rxc{border:2px solid var(--ink);background:#fff;border-radius:999px;padding:0 .45rem;font:700 .78rem/1.5 "JetBrains Mono",monospace;cursor:pointer;color:var(--ink)}
-.rxc.on{background:var(--y)}
 .rxgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:.5rem;margin-bottom:.8rem}
 .rxpick{aspect-ratio:1;border:3px solid var(--ink);background:#fff;font-size:1.5rem;cursor:pointer;padding:0}
 .rxpick.on{background:var(--y)}
+
+/* ----- reaksi ala WhatsApp, baris panggilan di chat ----- */
+.bub{position:relative}
+.bub.hasrx{margin-bottom:1rem}
+.bub .rx{position:absolute;bottom:-.95rem;left:.5rem;z-index:2}
+.bub.out .rx{left:auto;right:.5rem}
+.rxp{border:2px solid var(--ink);background:#fff;border-radius:999px;padding:0 .45rem;font:700 .8rem/1.55 "JetBrains Mono",monospace;cursor:pointer;color:var(--ink);box-shadow:2px 2px 0 var(--ink)}
+.rxp.on{background:var(--y)}
+.rxbar{display:flex;gap:.3rem;justify-content:space-between;margin-bottom:.7rem;padding:.4rem;border:3px solid var(--ink);background:#fff;border-radius:999px}
+.rxq{flex:1;aspect-ratio:1;max-width:2.8rem;border:0;border-radius:50%;background:none;font-size:1.5rem;cursor:pointer;padding:0;color:var(--ink)}
+.rxq.on{background:var(--y)}
+.rxq.more{font:700 1.3rem "JetBrains Mono",monospace;background:#eee}
+.rxgrid[hidden]{display:none}
+.rxtabs{display:flex;gap:.4rem;overflow-x:auto;margin-bottom:.6rem;padding-bottom:.2rem}
+.rxtab{flex:none;border:2px solid var(--ink);background:#fff;border-radius:999px;padding:.2rem .7rem;font:700 .8rem "JetBrains Mono",monospace;cursor:pointer;color:var(--ink)}
+.rxtab.on{background:var(--y)}
+.crow{align-self:center;display:flex;align-items:center;gap:.5rem;background:#fff;border:2px solid var(--ink);padding:.3rem .8rem;margin:.3rem 0;font-size:.8rem;box-shadow:2px 2px 0 var(--ink);max-width:90%}
+.crow .ic{width:1rem;height:1rem;flex:none}
+.crow.miss{color:var(--red)}
+.crow time{color:var(--mut);font-size:.7rem;flex:none}

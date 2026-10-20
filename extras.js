@@ -17,7 +17,7 @@ window.WCX = function (c) {
   }
 
   /* ---------- pesan suara: rekam, kirim, putar ---------- */
-  const VN = /^\[vn:([0-9a-f]{24}):(\d{1,3})\]$/;
+  const VN = /^(?:\[re:\d+\])?\[vn:([0-9a-f]{24}):(\d{1,3})\]$/;  // boleh diawali [re:id] (suara sebagai balasan)
   const fmtT = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
   let playing = null;  // hanya satu pesan suara yang diputar sekali waktu
   function voicePlayer(src, secs, pending) {
@@ -37,12 +37,12 @@ window.WCX = function (c) {
   }
   const b64 = (blob) => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(",")[1] || ""); f.onerror = rej; f.readAsDataURL(blob); });
   async function sendVoice(blob, secs, to) {
-    const url = URL.createObjectURL(blob);
-    const el = c.addMsg({ sender: c.me().player_id, to, kind: "text", body: "[vn:" + "0".repeat(24) + ":" + secs + "]", localVoice: { url, secs }, t: new Date().toISOString(), pending: true });
+    const url = URL.createObjectURL(blob), re = st.reply ? "[re:" + st.reply + "]" : ""; c.stopReply();  // rekaman bisa dikirim sebagai balasan
+    const el = c.addMsg({ sender: c.me().player_id, to, kind: "text", body: re + "[vn:" + "0".repeat(24) + ":" + secs + "]", localVoice: { url, secs }, t: new Date().toISOString(), pending: true });
     const note = el.querySelector(".vnp");
     try {
       const up = await api("/voice", { method: "POST", body: JSON.stringify({ mime: blob.type || "audio/webm", secs, data: await b64(blob) }) });
-      const m = await c.send(to, "text", "[vn:" + up.id + ":" + secs + "]");
+      const m = await c.send(to, "text", re + "[vn:" + up.id + ":" + secs + "]");
       st.last[to] = m.body; st.lastT[to] = m.t; el.dataset.t = m.t; el.dataset.mid = m.id; st.byId[m.id] = m;
       el.querySelector("time").textContent = c.tm(m.t); el.querySelector(".tk").replaceWith(c.tick(m)); c.render(); if (note) note.remove();
     } catch (err) { if (note) note.textContent = "Gagal"; el.querySelector(".tk").replaceWith(ic("x", "tk fail")); toast("Pesan suara gagal terkirim: " + err.message); }
@@ -71,20 +71,18 @@ window.WCX = function (c) {
   }
   $("#mic").onclick = startVoice;
 
-  /* ---------- reaksi emoji ---------- */
-  const RXS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😡", "🤔", "👎"], rx = {};
+  /* ---------- reaksi emoji (seperti WhatsApp) ---------- */
+  const RXS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😡", "🤔", "👎", "😍", "🥰", "😭", "😅", "🤣", "😎", "😁", "🙄", "😴", "🤝",
+    "🙌", "💯", "✅", "❌", "💔", "👀", "🤗", "😘", "🥳", "😇", "🤩", "😬"], QUICK = RXS.slice(0, 6), rx = {};  // daftar sama dengan REACTIONS di extras.py
   const isChannel = () => { const r = c.roomOf(st.cur || ""); return !!r && r.kind === "channel"; };
-  function chip(id, o) {
-    const b = mk("button", o.e + (o.n > 1 ? " " + o.n : ""), "rxc" + (o.mine ? " on" : "")); b.type = "button";
-    b.setAttribute("aria-label", "Reaksi " + o.e + ", " + o.n + (o.mine ? ", milikmu" : "")); b.onclick = () => react(id, o.mine ? "" : o.e);
-    return b;
-  }
-  function paintReactions() {
+  function paintReactions() {  // satu pil kecil di tepi bawah gelembung: emoji teratas + jumlah
     document.querySelectorAll("#msgs .bub[data-mid]").forEach((d) => {
-      const id = d.dataset.mid, list = rx[id] || []; let box = d.querySelector(":scope > .rx");
-      if (!list.length) { if (box) box.remove(); return; }
+      const id = +d.dataset.mid, list = rx[id] || []; let box = d.querySelector(":scope > .rx");
+      if (!list.length) { if (box) box.remove(); d.classList.remove("hasrx"); return; }
       if (!box) { box = mk("div", null, "rx"); d.append(box); }
-      box.replaceChildren(...list.map((o) => chip(+id, o)));
+      const total = list.reduce((s, o) => s + o.n, 0), p = mk("button", list.slice(0, 3).map((o) => o.e).join("") + (total > 1 ? " " + total : ""), "rxp" + (list.some((o) => o.mine) ? " on" : ""));
+      p.type = "button"; p.setAttribute("aria-label", "Reaksi: " + list.map((o) => o.e + " " + o.n).join(", ")); p.onclick = (ev) => { ev.stopPropagation(); showReactors(id); };
+      box.replaceChildren(p); d.classList.add("hasrx");
     });
   }
   async function loadReactions() {
@@ -95,22 +93,60 @@ window.WCX = function (c) {
     try { const r = await api("/react", { method: "POST", body: JSON.stringify({ msg_id: id, emoji }) }); if (r.reactions.length) rx[id] = r.reactions; else delete rx[id]; paintReactions(); }
     catch (err) { toast(err.message); }
   }
-  function pickReaction(m) {
-    const mine = ((rx[m.id] || []).find((o) => o.mine) || {}).e;
-    c.sheet("Beri reaksi", (box, close) => {
-      const g = mk("div", null, "rxgrid");
-      RXS.forEach((e) => { const b = mk("button", e, "rxpick" + (e === mine ? " on" : "")); b.type = "button"; b.setAttribute("aria-label", "Reaksi " + e); b.onclick = () => { close(); react(m.id, e === mine ? "" : e); }; g.append(b); });
-      box.append(g);
-      if (mine) { const r = mk("button", "Hapus reaksiku", "btn full ghost"); r.type = "button"; r.onclick = () => { close(); react(m.id, ""); }; box.append(r); }
+  function showReactors(id) {  // tab Semua / per emoji; ketuk reaksimu sendiri untuk menghapus
+    const list = rx[id] || [], total = list.reduce((s, o) => s + o.n, 0), me = c.me().player_id, ch = isChannel();
+    if (!list.length) return;
+    c.sheet(total + " reaksi", (box, close) => {
+      let sel = "all"; const tabs = mk("div", null, "rxtabs"), body = mk("div");
+      const draw = () => {
+        tabs.replaceChildren(...[["all", "Semua " + total], ...list.map((o) => [o.e, o.e + " " + o.n])].map(([k, l]) => { const b = mk("button", l, "rxtab" + (k === sel ? " on" : "")); b.type = "button"; b.onclick = () => { sel = k; draw(); }; return b; }));
+        const ul = mk("ul", null, "list");
+        list.filter((o) => sel === "all" || o.e === sel).forEach((o) => {
+          if (ch) { ul.append(c.row(null, o.e + " " + o.n + " reaksi", "", () => {}, {})); return; }  // saluran: hanya jumlah, tanpa nama
+          (o.users || []).forEach((p) => { const mine = p === me; ul.append(c.row(null, mine ? "Kamu" : c.gName(p), mine ? "Ketuk untuk menghapus" : "", mine ? () => { close(); react(id, ""); } : () => {}, { time: o.e })); });
+        });
+        body.replaceChildren(ul);
+        if (ch && list.some((o) => o.mine)) { const r = mk("button", "Hapus reaksiku", "btn full ghost"); r.type = "button"; r.onclick = () => { close(); react(id, ""); }; body.append(r); }
+      };
+      draw(); box.append(tabs, body);
     });
   }
-  function showReactors(m) {
-    const list = rx[m.id] || [];
-    c.sheet("Reaksi", (box) => list.forEach((o) => {
-      box.append(mk("p", o.e + " " + o.n, "dlg-l"));
-      const ul = mk("ul", null, "list"); (o.users || []).forEach((p) => ul.append(c.row(null, p === c.me().player_id ? "Kamu" : c.gName(p), "", () => {}, {}))); box.append(ul);
-    }));
+
+  /* ---------- riwayat panggilan di dalam chat kontak ---------- */
+  const dayStr = (ms) => new Date(ms).toDateString();
+  function callText(o) {
+    const k = o.video ? "video" : "suara";
+    if (o.status === "answered") return "Panggilan " + k + (o.secs != null ? " · " + fmtT(o.secs) : "");
+    if (o.status === "rejected") return o.out ? "Panggilan " + k + " ditolak" : "Kamu menolak panggilan " + k;
+    return o.out ? "Panggilan " + k + " tidak dijawab" : "Panggilan " + k + " tak terjawab";
   }
+  function placeCall(el, t) {
+    const box = $("#msgs"), stamp = (k) => { const b = k.classList.contains("grow") ? k.querySelector(".bub") : k; return Date.parse((b && (b.dataset.ts || b.dataset.t)) || "") || 0; };
+    const kids = [...box.children].filter((k) => /\b(bub|grow|crow)\b/.test(k.className)), next = kids.find((k) => stamp(k) > t), prev = next ? kids[kids.indexOf(next) - 1] : kids[kids.length - 1];
+    const needSep = (!prev || dayStr(stamp(prev)) !== dayStr(t)) && !(next && dayStr(stamp(next)) === dayStr(t));
+    const parts = [];
+    if (needSep) { const s = mk("div", c.dayLabel(new Date(t).toISOString()), "dsep"); s.setAttribute("role", "separator"); parts.push(s); }
+    parts.push(el);
+    if (next) {  // kalau pemisah tanggal milik pesan berikutnya ada tepat di depannya dan harinya berbeda, taruh di atas pemisah itu
+      const all = [...box.children], before = all[all.indexOf(next) - 1], anchor = before && /\bdsep\b/.test(before.className) && dayStr(stamp(next)) !== dayStr(t) ? before : next;
+      anchor.before(...parts);
+    } else { box.append(...parts); const d = new Date(t); st.day = d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); }
+  }
+  async function loadCalls() {
+    const p = st.cur; if (!p || p.startsWith("R-") || p === c.me().player_id) return;
+    try {
+      const r = await api("/chatcalls?peer=" + encodeURIComponent(p)); if (st.cur !== p) return;
+      r.calls.slice().reverse().forEach((o) => {
+        const old = document.querySelector('#msgs .crow[data-call="' + o.id + '"]'), t = Date.parse(o.t), txt = callText(o);
+        if (old) { old.querySelector(".ctxt").textContent = txt; return; }
+        const el = mk("div", null, "crow" + (o.status === "answered" ? "" : " miss")); el.dataset.call = o.id; el.dataset.ts = o.t;
+        el.append(ic(o.video ? "video" : "phone"), mk("span", txt, "ctxt"), mk("time", c.tm(o.t)));
+        placeCall(el, t);
+      });
+      $("#msgs").scrollTop = $("#msgs").scrollHeight;
+    } catch {}
+  }
+  function callDone(peer) { if (peer === st.cur) { setTimeout(loadCalls, 1500); setTimeout(loadCalls, 5000); } }  // durasi baru tercatat beberapa detik setelah selesai
 
   /* ---------- polling & pertanyaan (tampil di gelembung) ---------- */
   const POLL = /^\[poll:(\d+)\]([\s\S]*)$/, QNA = /^\[qna:(\d+)\]([\s\S]*)$/;
@@ -119,6 +155,7 @@ window.WCX = function (c) {
   function fill(box, m, d) {
     const vm = m.localVoice ? [0, 0, m.localVoice.secs] : VN.exec(m.body);
     if (vm) {
+      const rid = /^\[re:(\d+)\]/.exec(m.body); if (rid) box.append(c.quote(+rid[1]));  // kutipan pesan yang dibalas
       box.append(voicePlayer(m.localVoice ? m.localVoice.url : "/api/voice/" + vm[1], +vm[2], !!m.localVoice)); d.classList.add("voice");
       return true;
     }
@@ -371,7 +408,7 @@ window.WCX = function (c) {
     if (bubbleOf(p.msg.id)) jump(p.msg.id); else showPins();
     pinIdx = (pinIdx + 1) % pins.length; paintBar();
   };
-  setInterval(() => { if (st.cur && !$("#room").hidden) { loadPins(); refreshWidgets(); loadChatState(st.cur); loadReactions(); } }, 15000);  // sematan dari lawan bicara ikut muncul
+  setInterval(() => { if (st.cur && !$("#room").hidden) { loadPins(); refreshWidgets(); loadChatState(st.cur); loadReactions(); loadCalls(); } }, 15000);  // sematan dari lawan bicara ikut muncul
 
   /* ---------- menu titik tiga di tiap pesan ---------- */
   function menuBtn(mt, d, m, mine, sid) {
@@ -380,33 +417,41 @@ window.WCX = function (c) {
     mt.append(b);
     if (m.id && stars.has(m.id)) { const s = mk("span", null, "stm"); s.append(ic("star")); mt.prepend(s); }  // mt belum dipasang ke d
   }
-  async function bubbleMenu(d, mine, sid) {
+  function bubbleMenu(d, mine, sid) {
     const id = +d.dataset.mid, m = st.byId[id];
     if (!id || !m) return toast("Tunggu pesan terkirim dulu");
-    const txt = c.parseRe(m.body).text, acts = [], pinned = pins.find((p) => p.msg.id === id);
+    const txt = c.parseRe(m.body).text, acts = [], pinned = pins.find((p) => p.msg.id === id), mineE = ((rx[id] || []).find((o) => o.mine) || {}).e;
     if (!$("#form").hidden) acts.push({ key: "reply", label: "Balas" });
-    acts.push({ key: "react", label: "Beri reaksi" });
-    if ((rx[id] || []).length && !isChannel()) acts.push({ key: "seerx", label: "Lihat reaksi" });
+    if ((rx[id] || []).length) acts.push({ key: "seerx", label: "Lihat reaksi" });
     if (!POLL.test(m.body) && !QNA.test(m.body) && !VN.test(m.body)) acts.push({ key: "fwd", label: "Teruskan" });
     acts.push({ key: "star", label: stars.has(id) ? "Hapus bintang" : "Beri bintang" });
     if (canPin) acts.push({ key: "pin", label: pinned ? "Lepas sematan pesan" : "Sematkan pesan" });
     if (!sid && txt && !VN.test(m.body)) acts.push({ key: "copy", label: "Salin teks" });
     if (sid && !mine) acts.push({ key: "stk", label: "Simpan stiker" });
     if (mine) acts.push({ key: "del", label: "Hapus pesan", danger: true });
-    const x = await dialog({ title: "Pesan", ok: null, actions: acts });
-    if (!x) return;
-    if (x.action === "reply") c.startReply(id);
-    else if (x.action === "react") pickReaction(m);
-    else if (x.action === "seerx") showReactors(m);
-    else if (x.action === "fwd") forwardMsg(m);
-    else if (x.action === "star") { const on = !stars.has(id); if (await setStar(id, on)) toast(on ? "Diberi bintang" : "Bintang dihapus"); }
-    else if (x.action === "pin") { if (pinned) unpin(pinned.id); else pinMsg(m); }
-    else if (x.action === "copy") navigator.clipboard.writeText(c.plain(txt)).then(() => toast("Teks disalin"), () => toast("Gagal menyalin"));
-    else if (x.action === "stk") c.saveSticker(sid);
-    else if (x.action === "del") {
-      if (!(await dialog({ title: "Hapus pesan?", desc: "Pesan dihapus untuk semua orang. Lawan bicara yang sedang membuka chat ini baru melihatnya hilang setelah membuka ulang.", ok: "Hapus" }))) return;
-      try { await api("/messages/" + id, { method: "DELETE" }); d.remove(); delete st.byId[id]; stars.delete(id); loadPins(); } catch (err) { toast(err.message); }
-    }
+    const run = async (k) => {
+      if (k === "reply") c.startReply(id);
+      else if (k === "seerx") showReactors(id);
+      else if (k === "fwd") forwardMsg(m);
+      else if (k === "star") { const on = !stars.has(id); if (await setStar(id, on)) toast(on ? "Diberi bintang" : "Bintang dihapus"); }
+      else if (k === "pin") { if (pinned) unpin(pinned.id); else pinMsg(m); }
+      else if (k === "copy") navigator.clipboard.writeText(c.plain(txt)).then(() => toast("Teks disalin"), () => toast("Gagal menyalin"));
+      else if (k === "stk") c.saveSticker(sid);
+      else if (k === "del") {
+        if (!(await dialog({ title: "Hapus pesan?", desc: "Pesan dihapus untuk semua orang. Lawan bicara yang sedang membuka chat ini baru melihatnya hilang setelah membuka ulang.", ok: "Hapus" }))) return;
+        try { await api("/messages/" + id, { method: "DELETE" }); d.remove(); delete st.byId[id]; stars.delete(id); loadPins(); } catch (err) { toast(err.message); }
+      }
+    };
+    c.sheet("Pesan", (box, close) => {
+      const bar = mk("div", null, "rxbar"), grid = mk("div", null, "rxgrid"), pick = (e) => { close(); react(id, e === mineE ? "" : e); };
+      grid.hidden = true;
+      QUICK.forEach((e) => { const b = mk("button", e, "rxq" + (e === mineE ? " on" : "")); b.type = "button"; b.setAttribute("aria-label", "Reaksi " + e); b.onclick = () => pick(e); bar.append(b); });
+      const more = mk("button", "+", "rxq more"); more.type = "button"; more.setAttribute("aria-label", "Reaksi lainnya"); more.onclick = () => { grid.hidden = !grid.hidden; };
+      bar.append(more);
+      RXS.forEach((e) => { const b = mk("button", e, "rxpick" + (e === mineE ? " on" : "")); b.type = "button"; b.setAttribute("aria-label", "Reaksi " + e); b.onclick = () => pick(e); grid.append(b); });
+      box.append(bar, grid);
+      acts.forEach((a) => { const b = mk("button", a.label, "btn full" + (a.danger ? "" : " ghost")); b.type = "button"; b.onclick = () => { close(); run(a.key); }; box.append(b); });
+    });
   }
 
   /* ---------- link profil / saluran / grup ---------- */
@@ -799,7 +844,7 @@ window.WCX = function (c) {
 
   return {
     preview, fill, menuBtn, showPins, showStars, shareLink, consumeLink, loadUnread, markRead, userDetail,
-    historyLoaded() { loadReactions(); },
+    historyLoaded() { loadReactions(); loadCalls(); }, callDone,
     rich, encodeMentions, memberMenu, blockToggle, loadBlocks, wallpaperFor, notify, notifyCall,
     opened() { Object.keys(rx).forEach((k) => delete rx[k]); if (rec) rec.cancel(); pins = [];  // pindah chat saat merekam: rekaman dibatalkan
      canPin = false; pinIdx = 0; paintBar(); loadPins(); applyWp(st.cur); loadChatState(st.cur); picked.clear(); mpop.hidden = true; },  // dipanggil tiap chat dibuka

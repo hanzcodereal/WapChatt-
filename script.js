@@ -386,7 +386,7 @@ async function initDashboard() {
     }
     const rp = parseRe(m.body);
     if (m.id) st.byId[m.id] = m;
-    d.dataset.mid = m.id || "";
+    d.dataset.mid = m.id || ""; d.dataset.ts = m.t || "";
     if (sid) { if (rp.id) box.append(quote(rp.id)); const im = mk("img", null, "smsg"); im.src = m.local || "/api/stickers/" + sid; im.alt = "Stiker"; box.append(im); }
     else if (X.fill && X.fill(box, m, d)) { /* polling / pertanyaan */ }
     else {
@@ -1125,6 +1125,7 @@ async function initDashboard() {
     return p;
   }
   function hang(notify, msg) {
+    const ended = [...peerIds(), ...(incoming ? [incoming.from] : [])];
     if (notify) peerIds().forEach((id) => sigTo(id, "end"));
     stopRing(); clearInterval(tmr); tmr = null; t0 = 0;
     peerIds().forEach(dropPeer); expected.clear(); incoming = null;
@@ -1132,6 +1133,7 @@ async function initDashboard() {
     stream = null; $("#local").srcObject = null; $("#unmute").hidden = true; $("#lav").hidden = true; $("#tiles").replaceChildren();
     $("#call").hidden = true; $("#incoming").hidden = true; $("#call").classList.remove("on", "vid");
     if (msg) toast(msg);
+    if (X.callDone) ended.forEach((p) => X.callDone(p));
   }
   async function dial(to, group) {  // sambungan keluar ke satu orang
     const p = newPeer(to); p.tile.stt.textContent = "Memanggil...";
@@ -1224,9 +1226,9 @@ async function initDashboard() {
       if (p) {
         const msg = type === "reject" ? "Panggilan ditolak" : t0 ? "Panggilan berakhir" : "Panggilan dibatalkan";
         dropPeer(from);
-        if (!peerIds().length) hang(false, msg); else toast(pname(from) + (type === "reject" ? " menolak panggilan" : " keluar dari panggilan"));
+        if (!peerIds().length) hang(false, msg); else { toast(pname(from) + (type === "reject" ? " menolak panggilan" : " keluar dari panggilan")); if (X.callDone) X.callDone(from); }
       } else if (incoming && incoming.from === from) {  // penelepon membatalkan saat masih berdering
-        incoming = null; expected.clear(); stopRing(); $("#incoming").hidden = true; toast("Panggilan dibatalkan");
+        incoming = null; expected.clear(); stopRing(); $("#incoming").hidden = true; toast("Panggilan dibatalkan"); if (X.callDone) X.callDone(from);
       }
     }
   }
@@ -1239,7 +1241,7 @@ async function initDashboard() {
     await answer(inc.from, inc.offer, inc.pend);
     (inc.offer.group || []).forEach((id) => { if (id !== me.player_id && !peers[id]) { learn(id); dial(id, []); } });  // sambungkan juga ke peserta lain
   };
-  $("#reject").onclick = () => { const inc = incoming; incoming = null; expected.clear(); stopRing(); $("#incoming").hidden = true; if (inc) sigTo(inc.from, "reject"); };
+  $("#reject").onclick = () => { const inc = incoming; incoming = null; expected.clear(); stopRing(); $("#incoming").hidden = true; if (inc) { sigTo(inc.from, "reject"); if (X.callDone) X.callDone(inc.from); } };
   $("#end").onclick = () => hang(true);
   $("#unmute").onclick = () => { Object.values(peers).forEach((p) => { p.tile.a.play().catch(() => {}); p.tile.v.play().catch(() => {}); }); $("#unmute").hidden = true; };
   $("#mute").onclick = (e) => {
@@ -1270,7 +1272,7 @@ async function initDashboard() {
   try { localStorage.removeItem("nova_lock"); } catch {}  // sisa kunci aplikasi lama
 
   /* ----- polling pesan + sinyal ----- */
-  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL, showMembers, refreshTicks, pick, plain, send }));
+  if (window.WCX) Object.assign(X, window.WCX({ mk, ic, api, dialog, sheet, toast, st, me: () => me, nameOf, isRoom, roomOf, open, zoom, tm, short, row, lastText, parseRe, addMsg, tick, render, startReply, saveSticker, showProfile, loadRooms, irow, av, gName, OFFICIAL, showMembers, refreshTicks, pick, plain, send, quote, stopReply, dayLabel }));
   await Promise.all([loadContacts(), loadRooms(), loadStories(), loadChats(), loadPresence()]);
   if (X.loadUnread) await X.loadUnread();
   if (X.loadBlocks) X.loadBlocks();

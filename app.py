@@ -291,7 +291,7 @@ def send(db, u):
                 return jsonify(error="Stiker tidak ditemukan."), 400
     if kind == "text" and body.startswith(("[poll:", "[qna:", "[fwd]")):
         return jsonify(error="Pesan tidak valid."), 400
-    if kind == "text" and body.startswith("[vn:"):
+    if kind == "text" and re.match(r"^(?:\[re:\d+\])?\[vn:", body):
         err = extras.check_voice(db, u.player_id, body)
         if err:
             return jsonify(error=err), 400
